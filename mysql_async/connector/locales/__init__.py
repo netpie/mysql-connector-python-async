@@ -23,12 +23,12 @@
 
 """Translations
 """
+from mysql_async.connector import errorcode
 
 __all__ = [
     'get_client_error'
 ]
 
-from .. import errorcode
 
 def get_client_error(error, language='eng'):
     """Lookup client error

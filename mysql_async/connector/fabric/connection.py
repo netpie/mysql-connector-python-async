@@ -35,6 +35,8 @@ import socket
 import collections
 
 # pylint: disable=F0401,E0611
+from mysql_async.connector import errorcode, version
+
 try:
     from xmlrpclib import Fault, ServerProxy, Transport
     import urllib2
@@ -61,22 +63,20 @@ else:
         HAVE_SSL = True
 # pylint: enable=F0401,E0611
 
-from ..connection import MySQLConnection
-from ..pooling import MySQLConnectionPool
-from ..errors import (
+from ..mysql_async.connector.connection import MySQLConnection
+from ..mysql_async.connector.pooling import MySQLConnectionPool
+from ..mysql_async.connector.errors import (
     Error, InterfaceError, NotSupportedError, MySQLFabricError, InternalError,
     DatabaseError
 )
-from ..cursor import (
+from ..mysql_async.connector.cursor import (
     MySQLCursor, MySQLCursorBuffered,
     MySQLCursorRaw, MySQLCursorBufferedRaw
 )
-from .. import errorcode
 from . import FabricMySQLServer, FabricShard
-from .caching import FabricCache
-from .balancing import WeightedRoundRobin
-from .. import version
-from ..catch23 import PY2, isunicode, UNICODE_TYPES
+from .mysql_async.connector.fabric.caching import FabricCache
+from .mysql_async.connector.fabric.balancing import WeightedRoundRobin
+from ..mysql_async.connector.catch23 import PY2, isunicode, UNICODE_TYPES
 
 RESET_CACHE_ON_ERROR = (
     errorcode.CR_SERVER_LOST,

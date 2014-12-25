@@ -28,6 +28,7 @@ from io import IOBase
 import os
 import re
 import time
+import asyncio
 
 from . import errors
 from .authentication import get_auth_plugin
@@ -45,6 +46,7 @@ from .cursor import (
 from .network import MySQLUnixSocket, MySQLTCPSocket
 from .protocol import MySQLProtocol
 from .utils import int4store
+
 
 DEFAULT_CONFIGURATION = {
     'database': None,
@@ -83,7 +85,10 @@ DEFAULT_CONFIGURATION = {
 
 class MySQLConnection(object):
     """Connection to a MySQL Server"""
-    def __init__(self, *args, **kwargs):
+    def __init__(self, loop=None, *args, **kwargs):
+        self._loop = loop
+        if loop is None:
+            self._loop = asyncio.get_event_loop()
         self._protocol = None
         self._socket = None
         self._handshake = None
@@ -126,7 +131,8 @@ class MySQLConnection(object):
         self._compress = False
 
         if len(kwargs) > 0:
-            self.connect(**kwargs)
+            #self.connect(**kwargs)
+            self.config(**kwargs)
 
     def _get_self(self):
         """Return self for weakref.proxy
@@ -136,9 +142,10 @@ class MySQLConnection(object):
         """
         return self
 
+    @asyncio.coroutine
     def _do_handshake(self):
         """Get the handshake from the MySQL server"""
-        packet = self._socket.recv()
+        packet = yield from self._socket.recv()
         if packet[4] == 255:
             raise errors.get_exception(packet)
 
@@ -175,6 +182,7 @@ class MySQLConnection(object):
         self._handshake = handshake
         self._server_version = version
 
+    @asyncio.coroutine
     def _do_auth(self, username=None, password=None, database=None,
                  client_flags=0, charset=33, ssl_options=None):
         """Authenticate with the MySQL server
@@ -201,20 +209,21 @@ class MySQLConnection(object):
             ssl_enabled=self._ssl_active,
             auth_plugin=self._auth_plugin)
         self._socket.send(packet)
-        self._auth_switch_request(username, password)
+        yield from self._auth_switch_request(username, password)
 
         if not (client_flags & ClientFlag.CONNECT_WITH_DB) and database:
             self.cmd_init_db(database)
 
         return True
 
+    @asyncio.coroutine
     def _auth_switch_request(self, username=None, password=None):
         """Handle second part of authentication
 
         Raises NotSupportedError when we get the old, insecure password
         reply back. Raises any error coming from MySQL.
         """
-        packet = self._socket.recv()
+        packet = yield from self._socket.recv()
         if packet[4] == 254 and len(packet) == 5:
             raise errors.NotSupportedError(
                 "Authentication with old (insecure) passwords "
@@ -231,7 +240,7 @@ class MySQLConnection(object):
                 self._socket.send(b'')
             else:
                 self._socket.send(response)
-            packet = self._socket.recv()
+            packet = yield from self._socket.recv()
             if packet[4] != 1:
                 return self._handle_ok(packet)
             else:
@@ -398,7 +407,7 @@ class MySQLConnection(object):
         """
         conn = None
         if self.unix_socket and os.name != 'nt':
-            conn = MySQLUnixSocket(unix_socket=self.unix_socket)
+            conn = MySQLUnixSocket(unix_socket=self.unix_socket, loop=self._loop)
         else:
             conn = MySQLTCPSocket(host=self.server_host,
                                   port=self.server_port,
@@ -406,6 +415,7 @@ class MySQLConnection(object):
         conn.set_connection_timeout(self._connection_timeout)
         return conn
 
+    @asyncio.coroutine
     def _open_connection(self):
         """Open the connection to the MySQL server
 
@@ -414,9 +424,9 @@ class MySQLConnection(object):
         Raises on errors.
         """
         self._socket = self._get_connection()
-        self._socket.open_connection()
-        self._do_handshake()
-        self._do_auth(self._user, self._password,
+        yield from self._socket.open_connection()
+        yield from self._do_handshake()
+        yield from self._do_auth(self._user, self._password,
                       self._database, self._client_flags, self._charset_id,
                       self._ssl)
         self.set_converter_class(self._converter_class)
@@ -438,6 +448,7 @@ class MySQLConnection(object):
         if self._sql_mode:
             self.sql_mode = self._sql_mode
 
+    @asyncio.coroutine
     def connect(self, **kwargs):
         """Connect to the MySQL server
 
@@ -451,7 +462,7 @@ class MySQLConnection(object):
         self._protocol = MySQLProtocol()
 
         self.disconnect()
-        self._open_connection()
+        yield from self._open_connection()
         self._post_connection()
 
     def shutdown(self):
@@ -478,6 +489,7 @@ class MySQLConnection(object):
             pass  # Getting an exception would mean we are disconnected.
     close = disconnect
 
+    @asyncio.coroutine
     def _send_cmd(self, command, argument=None, packet_number=0, packet=None,
                   expect_response=True):
         """Send a command to the MySQL server
@@ -507,8 +519,11 @@ class MySQLConnection(object):
 
         if not expect_response:
             return None
-        return self._socket.recv()
 
+        rd = yield from self._socket.recv()
+        return rd
+
+    @asyncio.coroutine
     def _send_data(self, data_file, send_empty_packet=False):
         """Send data to the MySQL server
 
@@ -539,8 +554,8 @@ class MySQLConnection(object):
             except AttributeError:
                 raise errors.OperationalError(
                     "MySQL Connection not available.")
-
-        return self._socket.recv()
+        rd = yield from self._socket.recv()
+        return rd
 
     def _handle_server_status(self, flags):
         """Handle the server flags found in MySQL packets
@@ -610,6 +625,7 @@ class MySQLConnection(object):
         return self._handle_ok(self._send_data(data_file,
                                                send_empty_packet=True))
 
+    @asyncio.coroutine
     def _handle_result(self, packet):
         """Handle a MySQL Result
 
@@ -646,12 +662,14 @@ class MySQLConnection(object):
 
         columns = [None,] * column_count
         for i in range(0, column_count):
-            columns[i] = self._protocol.parse_column(self._socket.recv())
-
-        eof = self._handle_eof(self._socket.recv())
+            rd = yield from self._socket.recv()
+            columns[i] = self._protocol.parse_column(rd)
+        rd = yield from self._socket.recv()
+        eof = self._handle_eof(rd)
         self.unread_result = True
         return {'columns': columns, 'eof': eof}
 
+    @asyncio.coroutine
     def get_rows(self, count=None, binary=False, columns=None):
         """Get all rows returned by the MySQL server
 
@@ -665,16 +683,17 @@ class MySQLConnection(object):
             raise errors.InternalError("No result set available.")
 
         if binary:
-            rows = self._protocol.read_binary_result(
+            rows = yield from self._protocol.read_binary_result(
                 self._socket, columns, count)
         else:
-            rows = self._protocol.read_text_result(self._socket, count)
+            rows = yield from self._protocol.read_text_result(self._socket, count)
         if rows[-1] is not None:
             self._handle_server_status(rows[-1]['status_flag'])
             self.unread_result = False
 
         return rows
 
+    @asyncio.coroutine
     def get_row(self, binary=False, columns=None):
         """Get the next rows returned by the MySQL server
 
@@ -685,7 +704,7 @@ class MySQLConnection(object):
 
         Returns a tuple.
         """
-        (rows, eof) = self.get_rows(count=1, binary=binary, columns=columns)
+        (rows, eof) = yield from self.get_rows(count=1, binary=binary, columns=columns)
         if len(rows):
             return (rows[0], eof)
         return (None, eof)
@@ -702,6 +721,7 @@ class MySQLConnection(object):
         return self._handle_ok(
             self._send_cmd(ServerCmd.INIT_DB, database.encode('utf-8')))
 
+    @asyncio.coroutine
     def cmd_query(self, query):
         """Send a query to the MySQL server
 
@@ -719,7 +739,8 @@ class MySQLConnection(object):
         """
         if not isinstance(query, bytes):
             query = query.encode('utf-8')
-        result = self._handle_result(self._send_cmd(ServerCmd.QUERY, query))
+        rd = yield from self._send_cmd(ServerCmd.QUERY, query)
+        result = yield from self._handle_result(rd)
 
         if self._have_next_result:
             raise errors.InterfaceError(
@@ -727,6 +748,7 @@ class MySQLConnection(object):
 
         return result
 
+    @asyncio.coroutine
     def cmd_query_iter(self, statements):
         """Send one or more statements to the MySQL server
 
@@ -757,7 +779,8 @@ class MySQLConnection(object):
         while self._have_next_result:
             if self.unread_result:
                 raise errors.InternalError("Unread result found.")
-            yield self._handle_result(self._socket.recv())
+            rd = yield from self._socket.recv()
+            yield self._handle_result(rd)
 
     def cmd_refresh(self, options):
         """Send the Refresh command to the MySQL server
@@ -811,6 +834,7 @@ class MySQLConnection(object):
             atype = ShutdownType.SHUTDOWN_DEFAULT
         return self._handle_eof(self._send_cmd(ServerCmd.SHUTDOWN, atype))
 
+    @asyncio.coroutine
     def cmd_statistics(self):
         """Send the statistics command to the MySQL Server
 
@@ -824,7 +848,8 @@ class MySQLConnection(object):
 
         packet = self._protocol.make_command(ServerCmd.STATISTICS)
         self._socket.send(packet, 0)
-        return self._protocol.parse_statistics(self._socket.recv())
+        rd = yield from self._socket.recv()
+        return self._protocol.parse_statistics(rd)
 
     def cmd_process_info(self):
         """Get the process list of the MySQL Server
@@ -863,6 +888,7 @@ class MySQLConnection(object):
         """
         return self._handle_eof(self._send_cmd(ServerCmd.DEBUG))
 
+    @asyncio.coroutine
     def cmd_ping(self):
         """Send the PING command
 
@@ -872,7 +898,8 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        return self._handle_ok(self._send_cmd(ServerCmd.PING))
+        rd = yield from self._send_cmd(ServerCmd.PING)
+        return self._handle_ok(rd)
 
     def cmd_change_user(self, username='', password='', database='',
                         charset=33):
@@ -912,6 +939,7 @@ class MySQLConnection(object):
 
         return ok_packet
 
+    @asyncio.coroutine
     def is_connected(self):
         """Reports whether the connection to MySQL Server is available
 
@@ -922,7 +950,7 @@ class MySQLConnection(object):
         Returns True or False.
         """
         try:
-            self.cmd_ping()
+            yield from self.cmd_ping()
         except:
             return False  # This method does not raise
         return True
@@ -1356,6 +1384,7 @@ class MySQLConnection(object):
         doc="Toggle whether to raise on warnings "\
             "(implies retrieving warnings).")
 
+    @asyncio.coroutine
     def cursor(self, buffered=None, raw=None, prepared=None, cursor_class=None,
                dictionary=None, named_tuple=None):
         """Instantiates and returns a cursor
@@ -1379,7 +1408,8 @@ class MySQLConnection(object):
         """
         if self._unread_result is True:
             raise errors.InternalError("Unread result found.")
-        if not self.is_connected():
+        connected = yield from self.is_connected()
+        if not connected:
             raise errors.OperationalError("MySQL Connection not available.")
         if cursor_class is not None:
             if not issubclass(cursor_class, CursorBase):
@@ -1520,6 +1550,7 @@ class MySQLConnection(object):
             raise errors.get_exception(packet)
         raise errors.InterfaceError('Expected Binary OK packet')
 
+    @asyncio.coroutine
     def _handle_binary_result(self, packet):
         """Handle a MySQL Result
 
@@ -1551,11 +1582,13 @@ class MySQLConnection(object):
 
         columns = [None] * column_count
         for i in range(0, column_count):
-            columns[i] = self._protocol.parse_column(self._socket.recv())
-
-        eof = self._handle_eof(self._socket.recv())
+            rd = yield from self._socket.recv()
+            columns[i] = self._protocol.parse_column(rd)
+        rd = yield from self._socket.recv()
+        eof = self._handle_eof(rd)
         return (column_count, columns, eof)
 
+    @asyncio.coroutine
     def cmd_stmt_prepare(self, statement):
         """Prepare a MySQL statement
 
@@ -1571,14 +1604,19 @@ class MySQLConnection(object):
         result['parameters'] = []
         if result['num_params'] > 0:
             for _ in range(0, result['num_params']):
+                rd = yield from self._socket.recv()
                 result['parameters'].append(
-                    self._protocol.parse_column(self._socket.recv()))
-            self._handle_eof(self._socket.recv())
+                    self._protocol.parse_column(rd))
+            rd = yield from self._socket.recv()
+            self._handle_eof(rd)
+
         if result['num_columns'] > 0:
             for _ in range(0, result['num_columns']):
+                rd = yield from self._socket.recv()
                 result['columns'].append(
-                    self._protocol.parse_column(self._socket.recv()))
-            self._handle_eof(self._socket.recv())
+                    self._protocol.parse_column(rd))
+            rd = yield from self._socket.recv()
+            self._handle_eof(rd)
 
         return result
 

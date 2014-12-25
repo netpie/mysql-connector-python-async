@@ -33,6 +33,7 @@ from .constants import (
 from . import errors, utils
 from .authentication import get_auth_plugin
 from .catch23 import PY2, struct_unpack
+import asyncio
 
 
 class MySQLProtocol(object):
@@ -289,6 +290,7 @@ class MySQLProtocol(object):
                         "{0} ({1}:{2}).".format(errmsg, lbl, val))
         return res
 
+    @asyncio.coroutine
     def read_text_result(self, sock, count=1):
         """Read MySQL text result
 
@@ -306,13 +308,13 @@ class MySQLProtocol(object):
                 break
             if i == count:
                 break
-            packet = sock.recv()
+            packet = yield from sock.recv()
             if packet.startswith(b'\xff\xff\xff'):
                 datas = [packet[4:]]
-                packet = sock.recv()
+                packet = yield from sock.recv()
                 while packet.startswith(b'\xff\xff\xff'):
                     datas.append(packet[4:])
-                    packet = sock.recv()
+                    packet = yield from sock.recv()
                 if packet[4] == 254:
                     eof = self.parse_eof(packet)
                 else:
@@ -434,6 +436,7 @@ class MySQLProtocol(object):
 
         return tuple(values)
 
+    @asyncio.coroutine
     def read_binary_result(self, sock, columns, count=1):
         """Read MySQL binary protocol result
 
@@ -448,7 +451,7 @@ class MySQLProtocol(object):
                 break
             if i == count:
                 break
-            packet = sock.recv()
+            packet = yield from sock.recv()
             if packet[4] == 254:
                 eof = self.parse_eof(packet)
                 values = None

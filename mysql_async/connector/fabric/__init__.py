@@ -45,15 +45,6 @@ CNX_FABRIC_ARGS = ['fabric_host', 'fabric_username', 'fabric_password',
                    'fabric_ssl_ca', 'fabric_ssl_key', 'fabric_ssl_cert',
                    'fabric_user']
 
-from .connection import (
-    MODE_READONLY, MODE_READWRITE,
-    STATUS_PRIMARY, STATUS_SECONDARY,
-    SCOPE_GLOBAL, SCOPE_LOCAL,
-    Fabric, FabricConnection,
-    MySQLFabricConnection,
-    FabricSet,
-)
-
 
 def connect(**kwargs):
     """Create a MySQLFabricConnection object"""
