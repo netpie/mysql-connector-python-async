@@ -212,7 +212,7 @@ class MySQLConnection(object):
         yield from self._auth_switch_request(username, password)
 
         if not (client_flags & ClientFlag.CONNECT_WITH_DB) and database:
-            self.cmd_init_db(database)
+            yield from self.cmd_init_db(database)
 
         return True
 
@@ -709,6 +709,7 @@ class MySQLConnection(object):
             return (rows[0], eof)
         return (None, eof)
 
+    @asyncio.coroutine
     def cmd_init_db(self, database):
         """Change the current database
 
@@ -718,8 +719,8 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        return self._handle_ok(
-            self._send_cmd(ServerCmd.INIT_DB, database.encode('utf-8')))
+        rd = yield from self._send_cmd(ServerCmd.INIT_DB, database.encode('utf-8'))
+        return self._handle_ok(rd)
 
     @asyncio.coroutine
     def cmd_query(self, query):
@@ -782,6 +783,7 @@ class MySQLConnection(object):
             rd = yield from self._socket.recv()
             yield self._handle_result(rd)
 
+    @asyncio.coroutine
     def cmd_refresh(self, options):
         """Send the Refresh command to the MySQL server
 
@@ -796,8 +798,8 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        return self._handle_ok(
-            self._send_cmd(ServerCmd.REFRESH, int4store(options)))
+        rd = yield from self._send_cmd(ServerCmd.REFRESH, int4store(options))
+        return self._handle_ok(rd)
 
     def cmd_quit(self):
         """Close the current connection with the server
@@ -815,6 +817,7 @@ class MySQLConnection(object):
         self._socket.send(packet, 0)
         return packet
 
+    @asyncio.coroutine
     def cmd_shutdown(self, shutdown_type=None):
         """Shut down the MySQL Server
 
@@ -832,7 +835,8 @@ class MySQLConnection(object):
             atype = shutdown_type
         else:
             atype = ShutdownType.SHUTDOWN_DEFAULT
-        return self._handle_eof(self._send_cmd(ServerCmd.SHUTDOWN, atype))
+        rd = yield from self._send_cmd(ServerCmd.SHUTDOWN, atype)
+        return self._handle_eof(rd)
 
     @asyncio.coroutine
     def cmd_statistics(self):
@@ -864,6 +868,7 @@ class MySQLConnection(object):
         raise errors.NotSupportedError(
             "Not implemented. Use SHOW PROCESSLIST or INFORMATION_SCHEMA")
 
+    @asyncio.coroutine
     def cmd_process_kill(self, mysql_pid):
         """Kill a MySQL process
 
@@ -873,9 +878,10 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        return self._handle_ok(
-            self._send_cmd(ServerCmd.PROCESS_KILL, int4store(mysql_pid)))
+        rd = yield from self._send_cmd(ServerCmd.PROCESS_KILL, int4store(mysql_pid))
+        return self._handle_ok(rd)
 
+    @asyncio.coroutine
     def cmd_debug(self):
         """Send the DEBUG command
 
@@ -886,7 +892,8 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        return self._handle_eof(self._send_cmd(ServerCmd.DEBUG))
+        rd = yield from self._send_cmd(ServerCmd.DEBUG)
+        return self._handle_eof(rd)
 
     @asyncio.coroutine
     def cmd_ping(self):
@@ -901,6 +908,7 @@ class MySQLConnection(object):
         rd = yield from self._send_cmd(ServerCmd.PING)
         return self._handle_ok(rd)
 
+    @asyncio.coroutine
     def cmd_change_user(self, username='', password='', database='',
                         charset=33):
         """Change the current logged in user
@@ -917,7 +925,7 @@ class MySQLConnection(object):
             raise errors.NotSupportedError("Change user is not supported with "
                                            "compression.")
 
-        packet = self._protocol.make_change_user(
+        packet = yield from self._protocol.make_change_user(
             handshake=self._handshake,
             username=username, password=password, database=database,
             charset=charset, client_flags=self._client_flags,
@@ -925,12 +933,12 @@ class MySQLConnection(object):
             auth_plugin=self._auth_plugin)
         self._socket.send(packet, 0)
 
-        ok_packet = self._auth_switch_request(username, password)
+        ok_packet = yield from self._auth_switch_request(username, password)
 
         try:
             if not (self._client_flags & ClientFlag.CONNECT_WITH_DB) \
                     and database:
-                self.cmd_init_db(database)
+                yield from self.cmd_init_db(database)
         except:
             raise
 
@@ -955,6 +963,7 @@ class MySQLConnection(object):
             return False  # This method does not raise
         return True
 
+    @asyncio.coroutine
     def reset_session(self, user_variables=None, session_variables=None):
         """Clears the current active session
 
@@ -971,28 +980,30 @@ class MySQLConnection(object):
         Raises OperationalError if not connected, InternalError if there are
         unread results and InterfaceError on errors.
         """
-        if not self.is_connected():
+        cn = yield from self.is_connected()
+        if not cn:
             raise errors.OperationalError("MySQL Connection not available.")
 
         try:
-            self.cmd_reset_connection()
+            yield from self.cmd_reset_connection()
         except errors.NotSupportedError:
             if self._compress:
                 raise errors.NotSupportedError(
                     "Reset session is not supported with compression for "
                     "MySQL server version 5.7.2 or earlier.")
             else:
-                self.cmd_change_user(self._user, self._password,
+                yield from self.cmd_change_user(self._user, self._password,
                                      self._database, self._charset_id)
 
-        cur = self.cursor()
+        cur = yield from self.cursor()
         if user_variables:
             for key, value in user_variables.items():
-                cur.execute("SET @`{0}` = %s".format(key), (value,))
+                yield from cur.execute("SET @`{0}` = %s".format(key), (value,))
         if session_variables:
             for key, value in session_variables.items():
-                cur.execute("SET SESSION `{0}` = %s".format(key), (value,))
+                yield from cur.execute("SET SESSION `{0}` = %s".format(key), (value,))
 
+    @asyncio.coroutine
     def reconnect(self, attempts=1, delay=0):
         """Attempt to reconnect to the MySQL server
 
@@ -1008,11 +1019,12 @@ class MySQLConnection(object):
         """
         counter = 0
         while counter != attempts:
-            counter = counter + 1
+            counter += 1
             try:
                 self.disconnect()
-                self.connect()
-                if self.is_connected():
+                yield from self.connect()
+                cn = yield from self.is_connected()
+                if cn:
                     break
             except Exception as err:  # pylint: disable=W0703
                 if counter == attempts:
@@ -1020,7 +1032,7 @@ class MySQLConnection(object):
                           "attempt(s): {1}".format(attempts, str(err))
                     raise errors.InterfaceError(msg)
             if delay > 0:
-                time.sleep(delay)
+                yield from asyncio.sleep(delay)
 
     def ping(self, reconnect=False, attempts=1, delay=0):
         """Check availability to the MySQL server
@@ -1037,10 +1049,10 @@ class MySQLConnection(object):
         Raises InterfaceError on errors.
         """
         try:
-            self.cmd_ping()
+            yield from self.cmd_ping()
         except:
             if reconnect:
-                self.reconnect(attempts=attempts, delay=delay)
+                yield from self.reconnect(attempts=attempts, delay=delay)
             else:
                 raise errors.InterfaceError("Connection to MySQL is"
                                             " not available.")
@@ -1243,7 +1255,7 @@ class MySQLConnection(object):
 
     @property
     def unix_socket(self):
-        "MySQL Unix socket file location"
+        """MySQL Unix socket file location"""
         return self._unix_socket
 
     def _set_unread_result(self, toggle):
@@ -1699,6 +1711,7 @@ class MySQLConnection(object):
         self._handle_ok(self._send_cmd(ServerCmd.STMT_RESET,
                                        int4store(statement_id)))
 
+    @asyncio.coroutine
     def cmd_reset_connection(self):
         """Resets the session state without re-authenticating
 
@@ -1711,5 +1724,6 @@ class MySQLConnection(object):
             raise errors.NotSupportedError("MySQL version 5.7.2 and "
                                            "earlier does not support "
                                            "COM_RESET_CONNECTION.")
-        self._handle_ok(self._send_cmd(ServerCmd.RESET_CONNECTION))
+        rd = yield from self._send_cmd(ServerCmd.RESET_CONNECTION)
+        self._handle_ok(rd)
         self._post_connection()
