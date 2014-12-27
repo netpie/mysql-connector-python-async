@@ -319,17 +319,19 @@ class MySQLCursor(CursorBase):
         except AttributeError:
             return False
 
+    @asyncio.coroutine
     def next(self):
         """Used for iterating over the result set."""
         return self.__next__()
 
+    @asyncio.coroutine
     def __next__(self):
         """
         Used for iterating over the result set. Calles self.fetchone()
         to get the next row.
         """
         try:
-            row = self.fetchone()
+            row = yield from self.fetchone()
         except errors.InterfaceError:
             raise StopIteration
         if not row:
@@ -388,6 +390,7 @@ class MySQLCursor(CursorBase):
         else:
             return tuple(res)
 
+    @asyncio.coroutine
     def _handle_noresultset(self, res):
         """Handles result of execute() when there is no result set
         """
@@ -400,8 +403,9 @@ class MySQLCursor(CursorBase):
                 "Failed handling non-resultset; {0}".format(err))
 
         if self._connection.get_warnings is True and self._warning_count:
-            self._warnings = self._fetch_warnings()
+            self._warnings = yield from self._fetch_warnings()
 
+    @asyncio.coroutine
     def _handle_resultset(self):
         """Handles result set
 
@@ -411,6 +415,7 @@ class MySQLCursor(CursorBase):
         """
         pass
 
+    @asyncio.coroutine
     def _handle_result(self, result):
         """
         Handle the result after a command was send. The result can be either
@@ -426,14 +431,15 @@ class MySQLCursor(CursorBase):
             # Weak test, must be column/eof information
             self._description = result['columns']
             self._connection.unread_result = True
-            self._handle_resultset()
+            yield from self._handle_resultset()
         elif 'affected_rows' in result:
             # Weak test, must be an OK-packet
             self._connection.unread_result = False
-            self._handle_noresultset(result)
+            yield from self._handle_noresultset(result)
         else:
             raise errors.InterfaceError('Invalid result')
 
+    @asyncio.coroutine
     def _execute_iter(self, query_iter):
         """Generator returns MySQLCursor objects for multiple statements
 
@@ -448,7 +454,7 @@ class MySQLCursor(CursorBase):
         while True:
             result = next(query_iter)
             self._reset_result()
-            self._handle_result(result)
+            yield from self._handle_result(result)
             try:
                 self._executed = executed_list[i].strip()
                 i += 1
@@ -509,12 +515,15 @@ class MySQLCursor(CursorBase):
         if multi:
             self._executed = stmt
             self._executed_list = []
-            return self._execute_iter(self._connection.cmd_query_iter(stmt))
+            #return self._execute_iter(self._connection.cmd_query_iter(stmt))
+            rd = yield from self._connection.cmd_query_iter(stmt)
+            rd1 = yield from self._execute_iter(rd)
+            return rd1
         else:
             self._executed = stmt
             try:
                 rd = yield from self._connection.cmd_query(stmt)
-                self._handle_result(rd)
+                yield from self._handle_result(rd)
             except errors.InterfaceError:
                 if self._connection._have_next_result:  # pylint: disable=W0212
                     raise errors.InterfaceError(
@@ -578,6 +587,7 @@ class MySQLCursor(CursorBase):
             raise errors.InterfaceError(
                 "Failed executing the operation; %s" % err)
 
+    @asyncio.coroutine
     def executemany(self, operation, seq_params):
         """Execute the given operation multiple times
 
@@ -615,12 +625,13 @@ class MySQLCursor(CursorBase):
                 return
             stmt = self._batch_insert(operation, seq_params)
             if stmt is not None:
-                return self.execute(stmt)
+                rd = yield from self.execute(stmt)
+                return rd
 
         rowcnt = 0
         try:
             for params in seq_params:
-                self.execute(operation, params)
+                yield from self.execute(operation, params)
                 if self.with_rows and self._have_unread_result():
                     self.fetchall()
                 rowcnt += self._rowcount
@@ -643,6 +654,7 @@ class MySQLCursor(CursorBase):
         """
         return iter(self._stored_results)
 
+    @asyncio.coroutine
     def callproc(self, procname, args=()):
         """Calls a stored procedure with the given arguments
 
@@ -699,10 +711,10 @@ class MySQLCursor(CursorBase):
                     if isinstance(arg, tuple):
                         argtypes.append(" CAST({0} AS {1})".format(argname,
                                                                    arg[1]))
-                        self.execute("SET {0}=%s".format(argname), (arg[0],))
+                        yield from self.execute("SET {0}=%s".format(argname), (arg[0],))
                     else:
                         argtypes.append(argname)
-                        self.execute("SET {0}=%s".format(argname), (arg,))
+                        yield from self.execute("SET {0}=%s".format(argname), (arg,))
 
             call = "CALL {0}({1})".format(procname, ','.join(argnames))
 
@@ -710,13 +722,13 @@ class MySQLCursor(CursorBase):
                 if 'columns' in result:
                     # pylint: disable=W0212
                     tmp = MySQLCursorBuffered(self._connection._get_self())
-                    tmp._handle_result(result)
+                    yield from tmp._handle_result(result)
                     results.append(tmp)
                     # pylint: enable=W0212
 
             if argnames:
                 select = "SELECT {0}".format(','.join(argtypes))
-                self.execute(select)
+                yield from self.execute(select)
                 self._stored_results = results
                 return self.fetchone()
             else:
@@ -739,6 +751,7 @@ class MySQLCursor(CursorBase):
         """
         return self._last_insert_id
 
+    @asyncio.coroutine
     def _fetch_warnings(self):
         """
         Fetch warnings doing a SHOW WARNINGS. Can be called after getting
@@ -748,9 +761,9 @@ class MySQLCursor(CursorBase):
         """
         res = []
         try:
-            cur = self._connection.cursor()
-            cur.execute("SHOW WARNINGS")
-            res = cur.fetchall()
+            cur = yield from self._connection.cursor()
+            yield from cur.execute("SHOW WARNINGS")
+            res = yield from cur.fetchall()
             cur.close()
         except Exception as err:
             raise errors.InterfaceError(
@@ -770,8 +783,9 @@ class MySQLCursor(CursorBase):
         self._nextrow = (None, None)
         self._warning_count = eof['warning_count']
         if self._connection.get_warnings is True and eof['warning_count']:
-            self._warnings = self._fetch_warnings()
+            self._warnings = yield from self._fetch_warnings()
 
+    @asyncio.coroutine
     def _fetch_row(self):
         """Returns the next row in the result set
 
@@ -782,13 +796,13 @@ class MySQLCursor(CursorBase):
         row = None
 
         if self._nextrow == (None, None):
-            (row, eof) = self._connection.get_row(
+            (row, eof) = yield from self._connection.get_row(
                 binary=self._binary, columns=self.description)
         else:
             (row, eof) = self._nextrow
 
         if row:
-            self._nextrow = self._connection.get_row(
+            self._nextrow = yield from self._connection.get_row(
                 binary=self._binary, columns=self.description)
             eof = self._nextrow[1]
             if eof is not None:
@@ -806,23 +820,25 @@ class MySQLCursor(CursorBase):
         """Returns Warnings."""
         return self._warnings
 
+    @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
 
         Returns a tuple or None.
         """
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return self._connection.converter.row_to_python(
                 row, self.description)
         return None
 
+    @asyncio.coroutine
     def fetchmany(self, size=None):
         res = []
         cnt = (size or self.arraysize)
         while cnt > 0 and self._have_unread_result():
             cnt -= 1
-            row = self.fetchone()
+            row = yield from self.fetchone()
             if row:
                 res.append(row)
         return res
@@ -831,7 +847,7 @@ class MySQLCursor(CursorBase):
     def fetchall(self):
         if not self._have_unread_result():
             raise errors.InterfaceError("No result set to fetch from.")
-        (rows, eof) =yield from self._connection.get_rows()
+        (rows, eof) = yield from self._connection.get_rows()
         if self._nextrow[0]:
             rows.insert(0, self._nextrow[0])
         res = [self._connection.converter.row_to_python(row, self.description)
@@ -902,8 +918,9 @@ class MySQLCursorBuffered(MySQLCursor):
         self._rows = None
         self._next_row = 0
 
+    @asyncio.coroutine
     def _handle_resultset(self):
-        (self._rows, eof) = self._connection.get_rows()
+        (self._rows, eof) = yield from self._connection.get_rows()
         self._rowcount = len(self._rows)
         self._handle_eof(eof)
         self._next_row = 0
@@ -915,6 +932,7 @@ class MySQLCursorBuffered(MySQLCursor):
     def reset(self):
         self._rows = None
 
+    @asyncio.coroutine
     def _fetch_row(self):
         row = None
         try:
@@ -926,6 +944,7 @@ class MySQLCursorBuffered(MySQLCursor):
             return row
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         if self._rows is None:
             raise errors.InterfaceError("No result set to fetch from.")
@@ -936,12 +955,13 @@ class MySQLCursorBuffered(MySQLCursor):
         self._next_row = len(self._rows)
         return res
 
+    @asyncio.coroutine
     def fetchmany(self, size=None):
         res = []
         cnt = (size or self.arraysize)
         while cnt > 0:
             cnt -= 1
-            row = self.fetchone()
+            row = yield from self.fetchone()
             if row:
                 res.append(row)
 
@@ -956,16 +976,18 @@ class MySQLCursorRaw(MySQLCursor):
     """
     Skips conversion from MySQL datatypes to Python types when fetching rows.
     """
+    @asyncio.coroutine
     def fetchone(self):
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return row
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         if not self._have_unread_result():
             raise errors.InterfaceError("No result set to fetch from.")
-        (rows, eof) = self._connection.get_rows()
+        (rows, eof) = yield from self._connection.get_rows()
         if self._nextrow[0]:
             rows.insert(0, self._nextrow[0])
         self._handle_eof(eof)
@@ -981,12 +1003,14 @@ class MySQLCursorBufferedRaw(MySQLCursorBuffered):
     Cursor which skips conversion from MySQL datatypes to Python types when
     fetching rows and fetches rows within execute().
     """
+    @asyncio.coroutine
     def fetchone(self):
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return row
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         if self._rows is None:
             raise errors.InterfaceError("No result set to fetch from.")
@@ -1008,6 +1032,7 @@ class MySQLCursorPrepared(MySQLCursor):
         self._binary = True
         self._have_result = None
 
+    @asyncio.coroutine
     def callproc(self, *args, **kwargs):
         """Calls a stored procedue
 
@@ -1015,6 +1040,7 @@ class MySQLCursorPrepared(MySQLCursor):
         """
         raise errors.NotSupportedError()
 
+    @asyncio.coroutine
     def close(self):
         """Close the cursor
 
@@ -1023,12 +1049,12 @@ class MySQLCursorPrepared(MySQLCursor):
         """
         if self._prepared:
             try:
-                self._connection.cmd_stmt_close(self._prepared['statement_id'])
+                yield from self._connection.cmd_stmt_close(self._prepared['statement_id'])
             except errors.Error:
                 # We tried to deallocate, but it's OK when we fail.
                 pass
             self._prepared = None
-        super(MySQLCursorPrepared, self).close()
+        yield from super(MySQLCursorPrepared, self).close()
 
     def _row_to_python(self, rowdata, desc=None):
         """Convert row data from MySQL to Python types
@@ -1038,17 +1064,19 @@ class MySQLCursorPrepared(MySQLCursor):
         """
         pass
 
+    @asyncio.coroutine
     def _handle_result(self, res):
         """Handle result after execution"""
         if isinstance(res, dict):
             self._connection.unread_result = False
             self._have_result = False
-            self._handle_noresultset(res)
+            yield from self._handle_noresultset(res)
         else:
             self._description = res[1]
             self._connection.unread_result = True
             self._have_result = True
 
+    @asyncio.coroutine
     def execute(self, operation, params=(), multi=False):  # multi is unused
         """Prepare and execute a MySQL Prepared Statement
 
@@ -1060,7 +1088,7 @@ class MySQLCursorPrepared(MySQLCursor):
         """
         if operation is not self._executed:
             if self._prepared:
-                self._connection.cmd_stmt_close(self._prepared['statement_id'])
+                yield from self._connection.cmd_stmt_close(self._prepared['statement_id'])
 
             self._executed = operation
             try:
@@ -1074,12 +1102,12 @@ class MySQLCursorPrepared(MySQLCursor):
                 operation = re.sub(RE_SQL_FIND_PARAM, b'?', operation)
 
             try:
-                self._prepared = self._connection.cmd_stmt_prepare(operation)
+                self._prepared = yield from self._connection.cmd_stmt_prepare(operation)
             except errors.Error:
                 self._executed = None
                 raise
 
-        self._connection.cmd_stmt_reset(self._prepared['statement_id'])
+        yield from self._connection.cmd_stmt_reset(self._prepared['statement_id'])
 
         if self._prepared['parameters'] and not params:
             return
@@ -1089,12 +1117,13 @@ class MySQLCursorPrepared(MySQLCursor):
                 msg="Incorrect number of arguments " \
                     "executing prepared statement")
 
-        res = self._connection.cmd_stmt_execute(
+        res = yield from self._connection.cmd_stmt_execute(
             self._prepared['statement_id'],
             data=params,
             parameters=self._prepared['parameters'])
-        self._handle_result(res)
+        yield from self._handle_result(res)
 
+    @asyncio.coroutine
     def executemany(self, operation, seq_params):
         """Prepare and execute a MySQL Prepared Statement many times
 
@@ -1109,7 +1138,7 @@ class MySQLCursorPrepared(MySQLCursor):
         rowcnt = 0
         try:
             for params in seq_params:
-                self.execute(operation, params)
+                yield from self.execute(operation, params)
                 if self.with_rows and self._have_unread_result():
                     self.fetchall()
                 rowcnt += self._rowcount
@@ -1121,27 +1150,31 @@ class MySQLCursorPrepared(MySQLCursor):
             raise
         self._rowcount = rowcnt
 
+    @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
 
         Returns a tuple or None.
         """
-        return self._fetch_row() or None
+        rd = yield from self._fetch_row()
+        return rd or None
 
+    @asyncio.coroutine
     def fetchmany(self, size=None):
         res = []
         cnt = (size or self.arraysize)
         while cnt > 0 and self._have_unread_result():
             cnt -= 1
-            row = self._fetch_row()
+            row = yield from self._fetch_row()
             if row:
                 res.append(row)
         return res
 
+    @asyncio.coroutine
     def fetchall(self):
         if not self._have_unread_result():
             raise errors.InterfaceError("No result set to fetch from.")
-        (rows, eof) = self._connection.get_rows(
+        (rows, eof) = yield from self._connection.get_rows(
             binary=self._binary, columns=self.description)
         self._rowcount = len(rows)
         self._handle_eof(eof)
@@ -1169,20 +1202,22 @@ class MySQLCursorDict(MySQLCursor):
             return dict(zip(self.column_names, row))
         return None
 
+    @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
         """
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return self._row_to_python(row, self.description)
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         """Returns all rows of a query result set
         """
         if not self._have_unread_result():
             raise errors.InterfaceError(_ERR_NO_RESULT_TO_FETCH)
-        (rows, eof) = self._connection.get_rows()
+        (rows, eof) = yield from self._connection.get_rows()
         if self._nextrow[0]:
             rows.insert(0, self._nextrow[0])
         res = [self._row_to_python(row, self.description)
@@ -1215,20 +1250,22 @@ class MySQLCursorNamedTuple(MySQLCursor):
             # pylint: enable=W0201
             return self.named_tuple(*row)
 
+    @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
         """
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return self._row_to_python(row, self.description)
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         """Returns all rows of a query result set
         """
         if not self._have_unread_result():
             raise errors.InterfaceError(_ERR_NO_RESULT_TO_FETCH)
-        (rows, eof) = self._connection.get_rows()
+        (rows, eof) = yield from self._connection.get_rows()
         if self._nextrow[0]:
             rows.insert(0, self._nextrow[0])
         res = [self._row_to_python(row, self.description)
@@ -1245,14 +1282,16 @@ class MySQLCursorBufferedDict(MySQLCursorDict, MySQLCursorBuffered):
     """
     Buffered Cursor fetching rows as dictionaries.
     """
+    @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
         """
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return self._row_to_python(row, self.description)
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         """Returns all rows of a query result set
         """
@@ -1270,14 +1309,16 @@ class MySQLCursorBufferedNamedTuple(MySQLCursorNamedTuple, MySQLCursorBuffered):
     """
     Buffered Cursor fetching rows as named tuple.
     """
+    @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
         """
-        row = self._fetch_row()
+        row = yield from self._fetch_row()
         if row:
             return self._row_to_python(row, self.description)
         return None
 
+    @asyncio.coroutine
     def fetchall(self):
         """Returns all rows of a query result set
         """

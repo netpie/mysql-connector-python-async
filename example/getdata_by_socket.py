@@ -9,6 +9,7 @@ Example using MySQL Connector/Python showing:
 
 import sys, os
 
+
 @asyncio.coroutine
 def main(config):
     output = []
@@ -32,9 +33,9 @@ if __name__ == '__main__':
 
     config = {
         'unix_socket': '/var/run/mysqld/mysqld.sock',
-        'database': 'mysql',
-        'user': 'root',
-        'password': 'your password',
+        'database': 'test',
+        'user': 'user1',
+        'password': 'user1',
         'charset': 'utf8',
         'use_unicode': True,
         'get_warnings': True,

@@ -131,7 +131,7 @@ class MySQLConnection(object):
         self._compress = False
 
         if len(kwargs) > 0:
-            #self.connect(**kwargs)
+            #self.connect(**kwargs) #removed for __init__ can not yield from coroutine
             self.config(**kwargs)
 
     def _get_self(self):
@@ -774,14 +774,19 @@ class MySQLConnection(object):
                 statements = bytearray(statements)
 
         # Handle the first query result
-        yield self._handle_result(self._send_cmd(ServerCmd.QUERY, statements))
+
+        #yield self._handle_result(self._send_cmd(ServerCmd.QUERY, statements))
+        rd = yield from self._send_cmd(ServerCmd.QUERY, statements)
+        rd1 = yield from self._handle_result(rd)
+        yield rd1
 
         # Handle next results, if any
         while self._have_next_result:
             if self.unread_result:
                 raise errors.InternalError("Unread result found.")
             rd = yield from self._socket.recv()
-            yield self._handle_result(rd)
+            rd1 = self._handle_result(rd)
+            yield rd1
 
     @asyncio.coroutine
     def cmd_refresh(self, options):
@@ -1609,7 +1614,7 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        packet = self._send_cmd(ServerCmd.STMT_PREPARE, statement)
+        packet = yield from self._send_cmd(ServerCmd.STMT_PREPARE, statement)
         result = self._handle_binary_ok(packet)
 
         result['columns'] = []
@@ -1632,6 +1637,7 @@ class MySQLConnection(object):
 
         return result
 
+    @asyncio.coroutine
     def cmd_stmt_execute(self, statement_id, data=(), parameters=(), flags=0):
         """Execute a prepared MySQL statement"""
         parameters = list(parameters)
@@ -1645,17 +1651,18 @@ class MySQLConnection(object):
                         binary = 'b' not in data[param_id].mode
                     except AttributeError:
                         pass
-                    self.cmd_stmt_send_long_data(statement_id, param_id,
-                                                 data[param_id])
+                    yield from self.cmd_stmt_send_long_data(statement_id, param_id,
+                                                            data[param_id])
                     long_data_used[param_id] = (binary,)
 
         execute_packet = self._protocol.make_stmt_execute(
             statement_id, data, tuple(parameters), flags,
             long_data_used, self.charset)
-        packet = self._send_cmd(ServerCmd.STMT_EXECUTE, packet=execute_packet)
-        result = self._handle_binary_result(packet)
+        packet = yield from self._send_cmd(ServerCmd.STMT_EXECUTE, packet=execute_packet)
+        result = yield from self._handle_binary_result(packet)
         return result
 
+    @asyncio.coroutine
     def cmd_stmt_close(self, statement_id):
         """Deallocate a prepared MySQL statement
 
@@ -1663,9 +1670,10 @@ class MySQLConnection(object):
         statement_id. Note that the MySQL server does not return
         anything.
         """
-        self._send_cmd(ServerCmd.STMT_CLOSE, int4store(statement_id),
-                       expect_response=False)
+        rd = yield from self._send_cmd(ServerCmd.STMT_CLOSE, int4store(statement_id),
+                                       expect_response=False)
 
+    @asyncio.coroutine
     def cmd_stmt_send_long_data(self, statement_id, param_id, data):
         """Send data for a column
 
@@ -1692,8 +1700,8 @@ class MySQLConnection(object):
             buf = data.read(chunk_size)
             while buf:
                 packet = prepare_packet(statement_id, param_id, buf)
-                self._send_cmd(ServerCmd.STMT_SEND_LONG_DATA, packet=packet,
-                               expect_response=False)
+                yield from self._send_cmd(ServerCmd.STMT_SEND_LONG_DATA, packet=packet,
+                                          expect_response=False)
                 total_sent += len(buf)
                 buf = data.read(chunk_size)
         except AttributeError:
@@ -1701,6 +1709,7 @@ class MySQLConnection(object):
 
         return total_sent
 
+    @asyncio.coroutine
     def cmd_stmt_reset(self, statement_id):
         """Reset data for prepared statement sent as long data
 
@@ -1708,8 +1717,9 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        self._handle_ok(self._send_cmd(ServerCmd.STMT_RESET,
-                                       int4store(statement_id)))
+        rd = self._send_cmd(ServerCmd.STMT_RESET,
+                            int4store(statement_id))
+        self._handle_ok(rd)
 
     @asyncio.coroutine
     def cmd_reset_connection(self):
