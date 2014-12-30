@@ -1,3 +1,4 @@
 mysql-connector-python-async
 ============================
-all examples works ,and powered by asyncio.
+
+all examples are tested only in python3.4 ,that's good.
