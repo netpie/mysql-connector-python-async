@@ -652,7 +652,7 @@ class MySQLCursor(CursorBase):
             for params in seq_params:
                 yield from self.execute(operation, params)
                 if self.with_rows and self._have_unread_result():
-                    self.fetchall()
+                    yield from self.fetchall()
                 rowcnt += self._rowcount
         except (ValueError, TypeError) as err:
             raise errors.InterfaceError(

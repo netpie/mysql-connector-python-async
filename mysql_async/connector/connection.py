@@ -1454,6 +1454,7 @@ class MySQLConnection(object):
                              ', '.join([args[i] for i in range(5)
                                         if cursor_type & (1 << i) != 0]))
 
+    @asyncio.coroutine
     def start_transaction(self, consistent_snapshot=False,
                           isolation_level=None, readonly=None):
         """Start a transaction
@@ -1485,7 +1486,7 @@ class MySQLConnection(object):
                 raise ValueError(
                     'Unknown isolation level "{0}"'.format(isolation_level))
 
-            self._execute_query(
+            yield from self._execute_query(
                 "SET TRANSACTION ISOLATION LEVEL {0}".format(level))
 
         if readonly is not None:
@@ -1498,25 +1499,28 @@ class MySQLConnection(object):
                 access_mode = 'READ ONLY'
             else:
                 access_mode = 'READ WRITE'
-            self._execute_query(
+            yield from self._execute_query(
                 "SET TRANSACTION {0}".format(access_mode))
 
         query = "START TRANSACTION"
         if consistent_snapshot:
             query += " WITH CONSISTENT SNAPSHOT"
-        self._execute_query(query)
+        yield from self._execute_query(query)
 
+    @asyncio.coroutine
     def commit(self):
         """Commit current transaction"""
-        self._execute_query("COMMIT")
+        yield from self._execute_query("COMMIT")
 
+    @asyncio.coroutine
     def rollback(self):
         """Rollback current transaction"""
         if self._unread_result:
-            self.get_rows()
+            yield from self.get_rows()
 
-        self._execute_query("ROLLBACK")
+        yield from self._execute_query("ROLLBACK")
 
+    @asyncio.coroutine
     def _execute_query(self, query):
         """Execute a query
 
@@ -1529,13 +1533,14 @@ class MySQLConnection(object):
         if self._unread_result is True:
             raise errors.InternalError("Unread result found.")
 
-        self.cmd_query(query)
+        yield from self.cmd_query(query)
 
+    @asyncio.coroutine
     def _info_query(self, query):
         """Send a query which only returns 1 row"""
-        cursor = self.cursor(buffered=True)
-        cursor.execute(query)
-        return cursor.fetchone()
+        cursor = yield from self.cursor(buffered=True)
+        yield from cursor.execute(query)
+        return (yield from cursor.fetchone())
 
     def _handle_binary_ok(self, packet):
         """Handle a MySQL Binary Protocol OK packet
