@@ -541,8 +541,7 @@ class MySQLCursor(CursorBase):
         else:
             self._executed = stmt
             try:
-                rd = yield from self._connection.cmd_query(stmt)
-                yield from self._handle_result(rd)
+                yield from self._handle_result((yield from self._connection.cmd_query(stmt)))
             except errors.InterfaceError:
                 if self._connection._have_next_result:  # pylint: disable=W0212
                     raise errors.InterfaceError(
@@ -644,8 +643,7 @@ class MySQLCursor(CursorBase):
                 return
             stmt = self._batch_insert(operation, seq_params)
             if stmt is not None:
-                rd = yield from self.execute(stmt)
-                return rd
+                return (yield from self.execute(stmt))
 
         rowcnt = 0
         try:

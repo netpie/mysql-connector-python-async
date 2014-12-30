@@ -37,6 +37,7 @@ import threading
 
 from . import errors
 from .connection import MySQLConnection
+import asyncio
 
 CONNECTION_POOL_LOCK = threading.RLock()
 CNX_POOL_ARGS = ('pool_name', 'pool_size', 'pool_reset_session')
@@ -290,6 +291,7 @@ class MySQLConnectionPool(object):
 
             self._queue_connection(cnx)
 
+    @asyncio.coroutine
     def get_connection(self):
         """Get a connection from the pool
 
@@ -311,11 +313,11 @@ class MySQLConnectionPool(object):
                     "Failed getting connection; pool exhausted")
 
             # pylint: disable=W0201,W0212
-            if not cnx.is_connected() \
+            if not (yield from cnx.is_connected()) \
                     or self._config_version != cnx._pool_config_version:
                 cnx.config(**self._cnx_config)
                 try:
-                    cnx.reconnect()
+                    yield from cnx.reconnect()
                 except errors.InterfaceError:
                     # Failed to reconnect, give connection back to pool
                     self._queue_connection(cnx)

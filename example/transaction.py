@@ -10,6 +10,7 @@ import asyncio
 import mysql_async.connector
 
 
+@asyncio.coroutine
 def main(config):
     output = []
     db = mysql_async.connector.Connect(**config)
@@ -23,7 +24,7 @@ def main(config):
     stmt_create = """
     CREATE TABLE names (
         id TINYINT UNSIGNED NOT NULL AUTO_INCREMENT,
-        name VARCHAR(30) DEFAULT '' NOT NULL,
+        name NVARCHAR(30) DEFAULT '' NOT NULL,
         cnt TINYINT UNSIGNED DEFAULT 0,
         PRIMARY KEY (id)
     ) ENGINE=InnoDB"""
@@ -46,7 +47,7 @@ def main(config):
     # Insert 3 records
     yield from db.start_transaction()
     output.append("Inserting data")
-    names = ( ('Geert',), ('Jan',), ('Michel',) )
+    names = ( ('汉子',), ('Jan',), ('Michel',) )
     stmt_insert = "INSERT INTO names (name) VALUES (%s)"
     yield from cursor.executemany(stmt_insert, names)
 

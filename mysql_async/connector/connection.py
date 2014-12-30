@@ -1014,8 +1014,7 @@ class MySQLConnection(object):
             try:
                 self.disconnect()
                 yield from self.connect()
-                cn = yield from self.is_connected()
-                if cn:
+                if (yield from self.is_connected()):
                     break
             except Exception as err:  # pylint: disable=W0703
                 if counter == attempts:
@@ -1025,6 +1024,7 @@ class MySQLConnection(object):
             if delay > 0:
                 yield from asyncio.sleep(delay)
 
+    @asyncio.coroutine
     def ping(self, reconnect=False, attempts=1, delay=0):
         """Check availability to the MySQL server
 
