@@ -375,18 +375,14 @@ class MySQLUnixSocket(BaseMySQLSocket):
             self._default_buffer_limit = 2**16  # default buffer limit length
 
     @asyncio.coroutine
-    def _async_connection(self):
-        return (yield from asyncio.wait_for(
+    def open_connection(self):
+        try:
+            #self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._reader, self._writer = (yield from asyncio.wait_for(
                 asyncio.open_unix_connection(path=self.unix_socket,
                                              loop=self._loop,
                                              limit=self._default_buffer_limit),
                 loop=self._loop, timeout=self._connection_timeout))
-
-    @asyncio.coroutine
-    def open_connection(self):
-        try:
-            #self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-            self._reader, self._writer = yield from self._async_connection()
             #self.sock.settimeout(self._connection_timeout)
             #self.sock.connect(self.unix_socket)
         except IOError as err:
@@ -402,8 +398,8 @@ class MySQLTCPSocket(BaseMySQLSocket):
     Opens a TCP/IP connection to the MySQL Server.
     """
 
-    def __init__(self, host='127.0.0.1', port=3306, force_ipv6=False):
-        super(MySQLTCPSocket, self).__init__()
+    def __init__(self, host='127.0.0.1', port=3306, force_ipv6=False, loop=None):
+        super(MySQLTCPSocket, self).__init__(loop)
         self.server_host = host
         self.server_port = port
         self.force_ipv6 = force_ipv6
@@ -414,6 +410,7 @@ class MySQLTCPSocket(BaseMySQLSocket):
     def get_address(self):
         return "{0}:{1}".format(self.server_host, self.server_port)
 
+    @asyncio.coroutine
     def open_connection(self):
         """Open the TCP/IP connection to the MySQL server
         """
@@ -445,9 +442,18 @@ class MySQLTCPSocket(BaseMySQLSocket):
 
         # Instanciate the socket and connect
         try:
-            self.sock = socket.socket(self._family, socktype, proto)
-            self.sock.settimeout(self._connection_timeout)
-            self.sock.connect(sockaddr)
+            #self.sock = socket.socket(self._family, socktype, proto)
+            #self.sock.settimeout(self._connection_timeout)
+            #self.sock.connect(sockaddr)
+            self._reader, self._writer = (yield from (
+                asyncio.wait_for(asyncio.open_connection(self.server_host,
+                                                         port=self.server_port,
+                                                         loop=self._loop,
+                                                         limit=self._default_buffer_limit),
+                                 timeout=self._connection_timeout,
+                                 loop=self._loop)
+                )
+            )
         except IOError as err:
             raise errors.InterfaceError(
                 errno=2003, values=(self.get_address(), _strioerror(err)))
