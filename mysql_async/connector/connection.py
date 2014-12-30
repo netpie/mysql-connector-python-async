@@ -520,8 +520,7 @@ class MySQLConnection(object):
         if not expect_response:
             return None
 
-        rd = yield from self._socket.recv()
-        return rd
+        return (yield from self._socket.recv())
 
     @asyncio.coroutine
     def _send_data(self, data_file, send_empty_packet=False):
@@ -554,8 +553,7 @@ class MySQLConnection(object):
             except AttributeError:
                 raise errors.OperationalError(
                     "MySQL Connection not available.")
-        rd = yield from self._socket.recv()
-        return rd
+        return (yield from self._socket.recv())
 
     def _handle_server_status(self, flags):
         """Handle the server flags found in MySQL packets
@@ -662,10 +660,8 @@ class MySQLConnection(object):
 
         columns = [None,] * column_count
         for i in range(0, column_count):
-            rd = yield from self._socket.recv()
-            columns[i] = self._protocol.parse_column(rd)
-        rd = yield from self._socket.recv()
-        eof = self._handle_eof(rd)
+            columns[i] = self._protocol.parse_column((yield from self._socket.recv()))
+        eof = self._handle_eof((yield from self._socket.recv()))
         self.unread_result = True
         return {'columns': columns, 'eof': eof}
 
@@ -719,8 +715,7 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        rd = yield from self._send_cmd(ServerCmd.INIT_DB, database.encode('utf-8'))
-        return self._handle_ok(rd)
+        return self._handle_ok((yield from self._send_cmd(ServerCmd.INIT_DB, database.encode('utf-8'))))
 
     @asyncio.coroutine
     def cmd_query(self, query):
@@ -740,8 +735,7 @@ class MySQLConnection(object):
         """
         if not isinstance(query, bytes):
             query = query.encode('utf-8')
-        rd = yield from self._send_cmd(ServerCmd.QUERY, query)
-        result = yield from self._handle_result(rd)
+        result = yield from self._handle_result((yield from self._send_cmd(ServerCmd.QUERY, query)))
 
         if self._have_next_result:
             raise errors.InterfaceError(
@@ -750,7 +744,16 @@ class MySQLConnection(object):
         return result
 
     @asyncio.coroutine
-    def cmd_query_iter(self, statements):
+    def next_result(self):
+        if not self._have_next_result:
+            return None
+        if self.unread_result:
+                raise errors.InternalError("Unread result found.")
+        return (yield from self._handle_result((yield from self._socket.recv())))
+
+
+    @asyncio.coroutine
+    def cmd_query_many(self, statements):
         """Send one or more statements to the MySQL server
 
         Similar to the cmd_query method, but instead returns a generator
@@ -775,18 +778,7 @@ class MySQLConnection(object):
 
         # Handle the first query result
 
-        #yield self._handle_result(self._send_cmd(ServerCmd.QUERY, statements))
-        rd = yield from self._send_cmd(ServerCmd.QUERY, statements)
-        rd1 = yield from self._handle_result(rd)
-        yield rd1
-
-        # Handle next results, if any
-        while self._have_next_result:
-            if self.unread_result:
-                raise errors.InternalError("Unread result found.")
-            rd = yield from self._socket.recv()
-            rd1 = self._handle_result(rd)
-            yield rd1
+        return (yield from self._handle_result((yield from self._send_cmd(ServerCmd.QUERY, statements))))
 
     @asyncio.coroutine
     def cmd_refresh(self, options):
@@ -803,8 +795,7 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        rd = yield from self._send_cmd(ServerCmd.REFRESH, int4store(options))
-        return self._handle_ok(rd)
+        return self._handle_ok((yield from self._send_cmd(ServerCmd.REFRESH, int4store(options))))
 
     def cmd_quit(self):
         """Close the current connection with the server
@@ -840,8 +831,7 @@ class MySQLConnection(object):
             atype = shutdown_type
         else:
             atype = ShutdownType.SHUTDOWN_DEFAULT
-        rd = yield from self._send_cmd(ServerCmd.SHUTDOWN, atype)
-        return self._handle_eof(rd)
+        return self._handle_eof((yield from self._send_cmd(ServerCmd.SHUTDOWN, atype)))
 
     @asyncio.coroutine
     def cmd_statistics(self):
@@ -857,8 +847,7 @@ class MySQLConnection(object):
 
         packet = self._protocol.make_command(ServerCmd.STATISTICS)
         self._socket.send(packet, 0)
-        rd = yield from self._socket.recv()
-        return self._protocol.parse_statistics(rd)
+        return self._protocol.parse_statistics((yield from self._socket.recv()))
 
     def cmd_process_info(self):
         """Get the process list of the MySQL Server
@@ -883,8 +872,7 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        rd = yield from self._send_cmd(ServerCmd.PROCESS_KILL, int4store(mysql_pid))
-        return self._handle_ok(rd)
+        return self._handle_ok((yield from self._send_cmd(ServerCmd.PROCESS_KILL, int4store(mysql_pid))))
 
     @asyncio.coroutine
     def cmd_debug(self):
@@ -897,8 +885,7 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        rd = yield from self._send_cmd(ServerCmd.DEBUG)
-        return self._handle_eof(rd)
+        return self._handle_eof((yield from self._send_cmd(ServerCmd.DEBUG)))
 
     @asyncio.coroutine
     def cmd_ping(self):
@@ -910,8 +897,7 @@ class MySQLConnection(object):
 
         Returns a dict()
         """
-        rd = yield from self._send_cmd(ServerCmd.PING)
-        return self._handle_ok(rd)
+        return self._handle_ok((yield from self._send_cmd(ServerCmd.PING)))
 
     @asyncio.coroutine
     def cmd_change_user(self, username='', password='', database='',
@@ -1599,10 +1585,8 @@ class MySQLConnection(object):
 
         columns = [None] * column_count
         for i in range(0, column_count):
-            rd = yield from self._socket.recv()
-            columns[i] = self._protocol.parse_column(rd)
-        rd = yield from self._socket.recv()
-        eof = self._handle_eof(rd)
+            columns[i] = self._protocol.parse_column((yield from self._socket.recv()))
+        eof = self._handle_eof((yield from self._socket.recv()))
         return (column_count, columns, eof)
 
     @asyncio.coroutine

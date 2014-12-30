@@ -37,23 +37,23 @@ def main(config):
     ]
 
     # Note 'multi=True' when calling cursor.execute()
-    rd = yield from cursor.execute(' ; '.join(stmts), multi=True)
-    for result in rd:
-        #yield from result
-        print(result)
+    result = yield from cursor.execute(' ; '.join(stmts), multi=True)
+    while True:
         if result.with_rows:
             if result.statement == stmts[3]:
                 output.append("Names in table: " +
-                              ' '.join([name[0] for name in result]))
+                              ' '.join([name[0] for name in (yield from result.fetchall())]))
             else:
+                rd = yield from result.fetchone()
                 output.append(
-                    "Number of rows: {0}".format(result.fetchone()[0]))
+                    "Number of rows: {0}".format(rd[0]))
         else:
             output.append("Inserted {0} row{1}".format(
-                result.rowcount,
-                's' if result.rowcount > 1 else ''))
+                result.rowcount, 's' if result.rowcount > 1 else ''))
+        if not (yield from result.next_exec_result()):
+            break
 
-    cursor.execute(stmt_drop)
+    yield from cursor.execute(stmt_drop)
 
     cursor.close()
     db.close()

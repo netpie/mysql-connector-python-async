@@ -309,7 +309,7 @@ class MySQLCursor(CursorBase):
         self._warning_count = 0
         self._description = None
         self._executed = None
-        self._executed_list = []
+        #self._executed_list = []
         self.reset()
 
     def _have_unread_result(self):
@@ -440,7 +440,21 @@ class MySQLCursor(CursorBase):
             raise errors.InterfaceError('Invalid result')
 
     @asyncio.coroutine
-    def _execute_iter(self, query_iter):
+    def next_exec_result(self):
+        rd = yield from self._connection.next_result()
+        if rd is None:
+            self._executed_list = []
+            return False
+        else:
+            #ostmt = self._executed_list
+            self._reset_result()
+            yield from self._handle_result(rd)
+            self._executed_list = self._executed_list[1:]
+            self._executed = self._executed_list[0]
+            return True
+
+    @asyncio.coroutine
+    def _execute_many(self, query_first):
         """Generator returns MySQLCursor objects for multiple statements
 
         This method is only used when multiple statements are executed
@@ -448,8 +462,13 @@ class MySQLCursor(CursorBase):
         given query_iter (result of MySQLConnection.cmd_query_iter()) and
         the list of statements that were executed.
         """
-        executed_list = RE_SQL_SPLIT_STMTS.split(self._executed)
+        #executed_list = RE_SQL_SPLIT_STMTS.split(self._executed)
+        #oexecuted = self._executed_list[0].strip()
+        self._reset_result()
+        self._executed = self._executed_list[0].strip()
+        yield from self._handle_result(query_first)
 
+        return self
         i = 0
         while True:
             result = next(query_iter)
@@ -514,10 +533,10 @@ class MySQLCursor(CursorBase):
 
         if multi:
             self._executed = stmt
-            self._executed_list = []
+            self._executed_list = RE_SQL_SPLIT_STMTS.split(self._executed)
             #return self._execute_iter(self._connection.cmd_query_iter(stmt))
-            rd = yield from self._connection.cmd_query_iter(stmt)
-            rd1 = yield from self._execute_iter(rd)
+            rd = yield from self._connection.cmd_query_many(stmt)
+            rd1 = yield from self._execute_many(rd)
             return rd1
         else:
             self._executed = stmt
