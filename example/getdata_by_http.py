@@ -1,14 +1,9 @@
-import asyncio
-import mysql_async.connector
-
-
 """
 Example using MySQL Connector/Python showing:
 * that show engines works..
 """
-
-import sys, os
-
+import asyncio
+import mysql_async.connector
 
 @asyncio.coroutine
 def main(config):
