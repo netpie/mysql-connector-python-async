@@ -1,17 +1,14 @@
 mysql-connector-python-async
 ============================
 
-Based on the MySQL Python connector for 2.0.2, made a few changes have been adapted to asyncio
+Based on the MySQL Python connector for 2.0.2, made a few changes have been adapted to asyncio.
 
-All of the examples are from mysql-connector-python, modified for asynchronous access.
+Most of the examples are from mysql-connector-python, modified for asynchronous access.
 
 
 Basic Example:
 
-"""
-Example using MySQL Connector/Python showing:
-* that show engines works..
-"""
+<pre>
 import asyncio
 import mysql_async.connector
 
@@ -48,6 +45,6 @@ if __name__ == '__main__':
     }
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main(config))
-
+</pre>
 
 
