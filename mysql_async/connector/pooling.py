@@ -35,7 +35,7 @@ except ImportError:
 # pylint: enable=F0401
 import threading
 
-from . import errors
+from mysql.connector import errors
 from .connection import MySQLConnection
 import asyncio
 

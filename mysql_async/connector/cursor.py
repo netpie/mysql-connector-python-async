@@ -29,7 +29,7 @@ import re
 import weakref
 import asyncio
 
-from mysql_async.connector import errors
+from mysql.connector import errors
 
 
 SQL_COMMENT = r"\/\*.*?\*\/"

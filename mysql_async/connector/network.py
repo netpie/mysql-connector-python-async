@@ -30,7 +30,7 @@ import struct
 import zlib
 import asyncio
 
-from mysql_async.connector import errors, constants
+from mysql.connector import errors, constants
 
 
 try:
@@ -39,7 +39,7 @@ except:
     # If import fails, we don't have SSL support.
     pass
 
-from .catch23 import PY2, init_bytearray, struct_unpack
+from mysql.connector.catch23 import PY2, init_bytearray, struct_unpack
 
 
 def _strioerror(err):
@@ -78,7 +78,6 @@ class BaseMySQLSocket(object):
     """
 
     def __init__(self, loop=None):
-        self.sock = None  # holds the socket connection
         self._loop = loop
         if loop is None:
             self._loop = asyncio.get_event_loop()
@@ -90,10 +89,18 @@ class BaseMySQLSocket(object):
         self.recvsize = 8192
         self._default_buffer_limit = 2**16
 
+    def set_buffer_limit(self, limit=None):
+        if limit is None:
+            return self._default_buffer_limit
+        if limit > 0:
+            self._default_buffer_limit = limit
+        else:
+            self._default_buffer_limit = 2**16  # default buffer limit passed to StreamReader(self._reader)
+
     @property
     def next_packet_number(self):
         """Increments the packet number"""
-        self._packet_number = self._packet_number + 1
+        self._packet_number += 1
         if self._packet_number > 255:
             self._packet_number = 0
         return self._packet_number
@@ -137,7 +144,6 @@ class BaseMySQLSocket(object):
         packets = _prepare_packets(buf, self._packet_number)
         for packet in packets:
             try:
-                #self.sock.sendall(packet)
                 self._writer.write(packet)
             except IOError as err:
                 raise errors.OperationalError(
@@ -217,26 +223,20 @@ class BaseMySQLSocket(object):
         """Receive packets from the MySQL server"""
         try:
             # Read the header of the MySQL packet, 4 bytes
-            #packet = bytearray(4)
-            #read = self.sock.recv_into(packet, 4)
-            packet = yield from self._reader.read(4)
-            if len(packet) != 4:
-                raise errors.InterfaceError(errno=2013)
+            packet = yield from self._reader.readexactly(4)
 
             # Save the packet number and payload length
             self._packet_number = packet[3]
             payload_len = struct.unpack("<I", packet[0:3] + b'\x00')[0]
 
             # Read the payload
-            #packet.extend(bytearray(payload_len))
             rest = payload_len
             spacket = packet
-            packet = bytearray(len(spacket) + payload_len)
-            packet[:len(spacket)] = spacket
+            packet = bytearray(4 + payload_len)
+            packet[:4] = spacket
             packet_view = memoryview(packet)  # pylint: disable=E0602
             packet_view = packet_view[4:]
             while rest:
-                #read = self.sock.recv_into(packet_view, rest)
                 read = yield from self._reader.read(rest)
                 lrd = len(read)
                 if lrd == 0 and rest > 0:
@@ -259,6 +259,7 @@ class BaseMySQLSocket(object):
             self._packet_queue.append(packet_bunch[0:payload_length + 4])
             packet_bunch = packet_bunch[payload_length + 4:]
 
+    @asyncio.coroutine
     def recv_compressed(self):
         """Receive compressed packets from the MySQL server"""
         try:
@@ -269,10 +270,10 @@ class BaseMySQLSocket(object):
         header = bytearray(b'')
         packets = []
         try:
-            abyte = self.sock.recv(1)
+            abyte = yield from self.sock.recv(1)
             while abyte and len(header) < 7:
                 header += abyte
-                abyte = self.sock.recv(1)
+                abyte = yield from self.sock.recv(1)
             while header:
                 if len(header) < 7:
                     raise errors.InterfaceError(errno=2013)
@@ -293,10 +294,10 @@ class BaseMySQLSocket(object):
                 if payload_length != 16384:
                     break
                 header = init_bytearray(b'')
-                abyte = self.sock.recv(1)
+                abyte = yield from self.sock.recv(1)
                 while abyte and len(header) < 7:
                     header += abyte
-                    abyte = self.sock.recv(1)
+                    abyte = yield from self.sock.recv(1)
         except IOError as err:
             raise errors.OperationalError(
                 errno=2055, values=(self.get_address(), _strioerror(err)))
@@ -307,11 +308,7 @@ class BaseMySQLSocket(object):
             if payload_length == 0:
                 tmp.append(packet[7:])
             else:
-                if PY2:
-                    tmp += zlib.decompress(
-                        buffer(packet[7:]))  # pylint: disable=E0602
-                else:
-                    tmp += zlib.decompress(packet[7:])
+                tmp += zlib.decompress(packet[7:])
 
         self._split_zipped_payload(tmp)
         del tmp
@@ -325,10 +322,9 @@ class BaseMySQLSocket(object):
         """Set the connection timeout"""
         self._connection_timeout = timeout
 
-    # pylint: disable=C0103
     def switch_to_ssl(self, ca, cert, key, verify_cert=False):
         """Switch the socket to use SSL"""
-        if not self.sock:
+        if not self._writer:
             raise errors.InterfaceError(errno=2048)
 
         try:
@@ -351,9 +347,10 @@ class BaseMySQLSocket(object):
         except NotImplementedError as err:
             raise errors.InterfaceError(str(err))
 
-
-# pylint: enable=C0103
-
+    @asyncio.coroutine
+    def drain(self):
+        if self._writer is not None:
+            yield from self._writer.drain()
 
 class MySQLUnixSocket(BaseMySQLSocket):
     """MySQL socket class using UNIX sockets
@@ -368,23 +365,14 @@ class MySQLUnixSocket(BaseMySQLSocket):
     def get_address(self):
         return self.unix_socket
 
-    def set_buffer_limit(self, limit):
-        if limit > 0:
-            self._default_buffer_limit = limit
-        else:
-            self._default_buffer_limit = 2**16  # default buffer limit length
-
     @asyncio.coroutine
     def open_connection(self):
         try:
-            #self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             self._reader, self._writer = (yield from asyncio.wait_for(
                 asyncio.open_unix_connection(path=self.unix_socket,
                                              loop=self._loop,
                                              limit=self._default_buffer_limit),
                 loop=self._loop, timeout=self._connection_timeout))
-            #self.sock.settimeout(self._connection_timeout)
-            #self.sock.connect(self.unix_socket)
         except IOError as err:
             raise errors.InterfaceError(
                 errno=2002, values=(self.get_address(), _strioerror(err)))
@@ -442,17 +430,13 @@ class MySQLTCPSocket(BaseMySQLSocket):
 
         # Instanciate the socket and connect
         try:
-            #self.sock = socket.socket(self._family, socktype, proto)
-            #self.sock.settimeout(self._connection_timeout)
-            #self.sock.connect(sockaddr)
-            self._reader, self._writer = (yield from (
-                asyncio.wait_for(asyncio.open_connection(self.server_host,
-                                                         port=self.server_port,
-                                                         loop=self._loop,
-                                                         limit=self._default_buffer_limit),
-                                 timeout=self._connection_timeout,
-                                 loop=self._loop)
-                )
+            self._reader, self._writer = (
+                yield from (asyncio.wait_for(asyncio.open_connection(self.server_host,
+                                                                     port=self.server_port,
+                                                                     loop=self._loop,
+                                                                     limit=self._default_buffer_limit),
+                                             timeout=self._connection_timeout,
+                                             loop=self._loop))
             )
         except IOError as err:
             raise errors.InterfaceError(

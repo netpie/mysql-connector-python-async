@@ -28,11 +28,11 @@ import struct
 import datetime
 from decimal import Decimal
 
-from .constants import (
+from mysql.connector.constants import (
     FieldFlag, ServerCmd, FieldType, ClientFlag)
-from . import errors, utils
-from .authentication import get_auth_plugin
-from .catch23 import PY2, struct_unpack
+from mysql.connector import errors, utils
+from mysql.connector.authentication import get_auth_plugin
+from mysql.connector.catch23 import PY2, struct_unpack
 import asyncio
 
 

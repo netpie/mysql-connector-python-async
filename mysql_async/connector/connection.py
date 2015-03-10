@@ -30,14 +30,14 @@ import re
 import time
 import asyncio
 
-from . import errors
-from .authentication import get_auth_plugin
-from .catch23 import PY2, isstr
-from .constants import (
+from mysql.connector import errors
+from mysql.connector.authentication import get_auth_plugin
+from mysql.connector.catch23 import PY2, isstr
+from mysql.connector.constants import (
     ClientFlag, ServerCmd, CharacterSet, ServerFlag,
     flag_is_set, ShutdownType, NET_BUFFER_LENGTH
 )
-from .conversion import MySQLConverterBase, MySQLConverter
+from mysql.connector.conversion import MySQLConverterBase, MySQLConverter
 from .cursor import (
     CursorBase, MySQLCursor, MySQLCursorRaw,
     MySQLCursorBuffered, MySQLCursorBufferedRaw, MySQLCursorPrepared,
@@ -45,7 +45,7 @@ from .cursor import (
     MySQLCursorBufferedNamedTuple)
 from .network import MySQLUnixSocket, MySQLTCPSocket
 from .protocol import MySQLProtocol
-from .utils import int4store
+from mysql.connector.utils import int4store
 
 
 DEFAULT_CONFIGURATION = {
@@ -131,7 +131,7 @@ class MySQLConnection(object):
         self._compress = False
 
         if len(kwargs) > 0:
-            #self.connect(**kwargs) #removed for __init__ can not yield from coroutine
+            #self.connect(**kwargs) #removed, for __init__ can not yield from coroutine
             self.config(**kwargs)
 
     def _get_self(self):
@@ -155,12 +155,7 @@ class MySQLConnection(object):
             raise errors.InterfaceError(
                 'Failed parsing handshake; {0}'.format(err))
 
-        if PY2:
-            regex_ver = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{1,3})(.*)")
-        else:
-            # pylint: disable=W1401
-            regex_ver = re.compile(br"^(\d{1,2})\.(\d{1,2})\.(\d{1,3})(.*)")
-            # pylint: enable=W1401
+        regex_ver = re.compile(br"^(\d{1,2})\.(\d{1,2})\.(\d{1,3})(.*)")
         match = regex_ver.match(handshake['server_version_original'])
         if not match:
             raise errors.InterfaceError("Failed parsing MySQL version")
@@ -198,6 +193,7 @@ class MySQLConnection(object):
         if client_flags & ClientFlag.SSL and ssl_options:
             packet = self._protocol.make_auth_ssl(charset=charset,
                                                   client_flags=client_flags)
+            yield from self._socket.drain()
             self._socket.send(packet)
             self._socket.switch_to_ssl(**ssl_options)
             self._ssl_active = True
@@ -208,6 +204,7 @@ class MySQLConnection(object):
             charset=charset, client_flags=client_flags,
             ssl_enabled=self._ssl_active,
             auth_plugin=self._auth_plugin)
+        yield from self._socket.drain()
         self._socket.send(packet)
         yield from self._auth_switch_request(username, password)
 
@@ -236,6 +233,7 @@ class MySQLConnection(object):
             auth = get_auth_plugin(new_auth_plugin)(
                 auth_data, password=password, ssl_enabled=self._ssl_active)
             response = auth.auth_response()
+            yield from self._socket.drain()
             if response == b'\x00':
                 self._socket.send(b'')
             else:
@@ -511,6 +509,7 @@ class MySQLConnection(object):
             raise errors.InternalError("Unread result found.")
 
         try:
+            yield from self._socket.drain()
             self._socket.send(
                 self._protocol.make_command(command, packet or argument),
                 packet_number)
@@ -542,6 +541,7 @@ class MySQLConnection(object):
         try:
             buf = data_file.read(NET_BUFFER_LENGTH - 16)
             while buf:
+                yield from self._socket.drain()
                 self._socket.send(buf)
                 buf = data_file.read(NET_BUFFER_LENGTH - 16)
         except AttributeError:
@@ -549,6 +549,7 @@ class MySQLConnection(object):
 
         if send_empty_packet:
             try:
+                yield from self._socket.drain()
                 self._socket.send(b'')
             except AttributeError:
                 raise errors.OperationalError(
@@ -797,6 +798,7 @@ class MySQLConnection(object):
         """
         return self._handle_ok((yield from self._send_cmd(ServerCmd.REFRESH, int4store(options))))
 
+    @asyncio.coroutine
     def cmd_quit(self):
         """Close the current connection with the server
 
@@ -808,8 +810,8 @@ class MySQLConnection(object):
         """
         if self.unread_result:
             raise errors.InternalError("Unread result found.")
-
         packet = self._protocol.make_command(ServerCmd.QUIT)
+        yield from self._socket.drain()
         self._socket.send(packet, 0)
         return packet
 
@@ -846,6 +848,7 @@ class MySQLConnection(object):
             raise errors.InternalError("Unread result found.")
 
         packet = self._protocol.make_command(ServerCmd.STATISTICS)
+        yield from self._socket.drain()
         self._socket.send(packet, 0)
         return self._protocol.parse_statistics((yield from self._socket.recv()))
 
@@ -922,6 +925,7 @@ class MySQLConnection(object):
             charset=charset, client_flags=self._client_flags,
             ssl_enabled=self._ssl_active,
             auth_plugin=self._auth_plugin)
+        yield from self._socket.drain()
         self._socket.send(packet, 0)
 
         ok_packet = yield from self._auth_switch_request(username, password)

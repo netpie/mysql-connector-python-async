@@ -27,18 +27,18 @@ MySQL Connector/Python - MySQL drive written in Python
 
 from . import version
 from .connection import MySQLConnection
-from .errors import (  # pylint: disable=W0622
+from mysql.connector.errors import (  # pylint: disable=W0622
     Error, Warning, InterfaceError, DatabaseError,
     NotSupportedError, DataError, IntegrityError, ProgrammingError,
     OperationalError, InternalError, custom_error_exception, PoolError)
-from .constants import FieldFlag, FieldType, CharacterSet, \
+from mysql.connector.constants import FieldFlag, FieldType, CharacterSet, \
     RefreshOption, ClientFlag
-from .dbapi import (
+from mysql.connector.dbapi import (
     Date, Time, Timestamp, Binary, DateFromTicks, DateFromTicks,
     TimestampFromTicks, TimeFromTicks,
     STRING, BINARY, NUMBER, DATETIME, ROWID,
     apilevel, threadsafety, paramstyle)
-from .optionfiles import read_option_files
+from mysql.connector.optionfiles import read_option_files
 
 _CONNECTION_POOLS = {}
 
