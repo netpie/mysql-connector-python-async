@@ -37,6 +37,7 @@ def main(config):
     ]
 
     # Note 'multi=True' when calling cursor.execute()
+    # Use next_exec_result() to get each result.
     result = yield from cursor.execute(' ; '.join(stmts), multi=True)
     while True:
         if result.with_rows:
@@ -55,7 +56,7 @@ def main(config):
 
     yield from cursor.execute(stmt_drop)
 
-    cursor.close()
+    yield from cursor.close()
     db.close()
     print(output)
 

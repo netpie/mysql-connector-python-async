@@ -27,26 +27,22 @@
 from io import IOBase
 import os
 import re
-import time
 import asyncio
 
 from mysql.connector import errors
 from mysql.connector.authentication import get_auth_plugin
-from mysql.connector.catch23 import PY2, isstr
+from mysql.connector.catch23 import isstr
 from mysql.connector.constants import (
-    ClientFlag, ServerCmd, CharacterSet, ServerFlag,
-    flag_is_set, ShutdownType, NET_BUFFER_LENGTH
-)
-from mysql.connector.conversion import MySQLConverterBase, MySQLConverter
+    ClientFlag, ServerCmd, ShutdownType, NET_BUFFER_LENGTH)
 from mysql.connector.cursor import CursorBase
 from .cursor import (
     AioMySQLCursor, AioMySQLCursorRaw,AioMySQLCursorBuffered,
     AioMySQLCursorBufferedRaw, AioMySQLCursorPrepared, AioMySQLCursorDict,
     AioMySQLCursorBufferedDict, AioMySQLCursorNamedTuple, AioMySQLCursorBufferedNamedTuple)
 from .network import MySQLUnixSocket, MySQLTCPSocket
-from .protocol import MySQLProtocol
+from .protocol import AioMySQLProtocol
 from mysql.connector.utils import int4store
-from mysql.connector.connection import MySQLConnection, DEFAULT_CONFIGURATION
+from mysql.connector.connection import MySQLConnection
 
 
 class AioMySQLConnection(MySQLConnection):
@@ -213,7 +209,7 @@ class AioMySQLConnection(MySQLConnection):
         if len(kwargs) > 0:
             self.config(**kwargs)
 
-        self._protocol = MySQLProtocol()
+        self._protocol = AioMySQLProtocol()
 
         self.disconnect()
         yield from self._open_connection()
@@ -327,10 +323,7 @@ class AioMySQLConnection(MySQLConnection):
         elif packet[4] == 0:
             return self._handle_ok(packet)
         elif packet[4] == 251:
-            if PY2:
-                filename = str(packet[5:])
-            else:
-                filename = packet[5:].decode()
+            filename = packet[5:].decode()
             return self._handle_load_data_infile(filename)
         elif packet[4] == 254:
             return self._handle_eof(packet)
@@ -1086,9 +1079,7 @@ class AioMySQLConnection(MySQLConnection):
 
         Returns a dict()
         """
-        rd = self._send_cmd(ServerCmd.STMT_RESET,
-                            int4store(statement_id))
-        self._handle_ok(rd)
+        self._handle_ok((yield from self._send_cmd(ServerCmd.STMT_RESET,int4store(statement_id))))
 
     @asyncio.coroutine
     def cmd_reset_connection(self):

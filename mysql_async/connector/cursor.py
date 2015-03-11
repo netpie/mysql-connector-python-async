@@ -77,6 +77,23 @@ class AioMySQLCursor(MySQLCursor):
         return row
 
     @asyncio.coroutine
+    def close(self):
+        """Close the cursor
+
+        Returns True when successful, otherwise False.
+        """
+        if self._connection is None:
+            return False
+        if self._have_unread_result():
+            raise errors.InternalError("Unread result found.")
+
+        self._reset_result()
+        self._executed_list = []
+        self._connection = None
+
+        return True
+
+    @asyncio.coroutine
     def _handle_noresultset(self, res):
         """Handles result of execute() when there is no result set
         """
@@ -165,18 +182,6 @@ class AioMySQLCursor(MySQLCursor):
         yield from self._handle_result(query_first)
 
         return self
-        i = 0
-        while True:
-            result = next(query_iter)
-            self._reset_result()
-            yield from self._handle_result(result)
-            try:
-                self._executed = executed_list[i].strip()
-                i += 1
-            except IndexError:
-                self._executed = executed_list[0]
-
-            yield self
 
     @asyncio.coroutine
     def execute(self, operation, params=None, multi=False):
@@ -206,6 +211,7 @@ class AioMySQLCursor(MySQLCursor):
             raise errors.InternalError("Unread result found.")
 
         self._reset_result()
+        self._executed_list = []
         stmt = ''
 
         try:
@@ -329,7 +335,6 @@ class AioMySQLCursor(MySQLCursor):
         if not isinstance(seq_params, (list, tuple)):
             raise errors.ProgrammingError(
                 "Parameters for query must be list or tuple.")
-
         # Optimize INSERTs by batching them
         if re.match(RE_SQL_INSERT_STMT, operation):
             if not seq_params:
@@ -338,7 +343,6 @@ class AioMySQLCursor(MySQLCursor):
             stmt = self._batch_insert(operation, seq_params)
             if stmt is not None:
                 return (yield from self.execute(stmt))
-
         rowcnt = 0
         try:
             for params in seq_params:
@@ -478,6 +482,7 @@ class AioMySQLCursor(MySQLCursor):
 
         return None
 
+    @asyncio.coroutine
     def _handle_eof(self, eof):
         """Handle EOF packet"""
         self._connection.unread_result = False
@@ -507,13 +512,13 @@ class AioMySQLCursor(MySQLCursor):
                 binary=self._binary, columns=self.description)
             eof = self._nextrow[1]
             if eof is not None:
-                self._handle_eof(eof)
+                yield from self._handle_eof(eof)
             if self._rowcount == -1:
                 self._rowcount = 1
             else:
                 self._rowcount += 1
         if eof:
-            self._handle_eof(eof)
+            yield from self._handle_eof(eof)
 
         return row
 
@@ -549,7 +554,7 @@ class AioMySQLCursor(MySQLCursor):
             rows.insert(0, self._nextrow[0])
         res = [self._connection.converter.row_to_python(row, self.description)
                for row in rows]
-        self._handle_eof(eof)
+        yield from self._handle_eof(eof)
         rowcount = len(rows)
         if rowcount >= 0 and self._rowcount == -1:
             self._rowcount = 0
@@ -573,7 +578,7 @@ class AioMySQLCursorBuffered(AioMySQLCursor):
     """Cursor which fetches rows within execute()"""
 
     def __init__(self, connection=None):
-        MySQLCursor.__init__(self, connection)
+        AioMySQLCursor.__init__(self, connection)
         self._rows = None
         self._next_row = 0
 
@@ -581,7 +586,7 @@ class AioMySQLCursorBuffered(AioMySQLCursor):
     def _handle_resultset(self):
         (self._rows, eof) = yield from self._connection.get_rows()
         self._rowcount = len(self._rows)
-        self._handle_eof(eof)
+        yield from self._handle_eof(eof)
         self._next_row = 0
         try:
             self._connection.unread_result = False
@@ -649,7 +654,7 @@ class AioMySQLCursorRaw(AioMySQLCursor):
         (rows, eof) = yield from self._connection.get_rows()
         if self._nextrow[0]:
             rows.insert(0, self._nextrow[0])
-        self._handle_eof(eof)
+        yield from self._handle_eof(eof)
         rowcount = len(rows)
         if rowcount >= 0 and self._rowcount == -1:
             self._rowcount = 0
@@ -684,7 +689,7 @@ class AioMySQLCursorPrepared(AioMySQLCursor):
     """Cursor using MySQL Prepared Statements
     """
     def __init__(self, connection=None):
-        super(MySQLCursorPrepared, self).__init__(connection)
+        super(AioMySQLCursorPrepared, self).__init__(connection)
         self._rows = None
         self._next_row = 0
         self._prepared = None
@@ -713,7 +718,7 @@ class AioMySQLCursorPrepared(AioMySQLCursor):
                 # We tried to deallocate, but it's OK when we fail.
                 pass
             self._prepared = None
-        yield from super(MySQLCursorPrepared, self).close()
+        yield from super(AioMySQLCursorPrepared, self).close()
 
     def _row_to_python(self, rowdata, desc=None):
         """Convert row data from MySQL to Python types
@@ -836,7 +841,7 @@ class AioMySQLCursorPrepared(AioMySQLCursor):
         (rows, eof) = yield from self._connection.get_rows(
             binary=self._binary, columns=self.description)
         self._rowcount = len(rows)
-        self._handle_eof(eof)
+        yield from self._handle_eof(eof)
         return rows
 
 
@@ -881,7 +886,7 @@ class AioMySQLCursorDict(AioMySQLCursor):
             rows.insert(0, self._nextrow[0])
         res = [self._row_to_python(row, self.description)
                for row in rows]
-        self._handle_eof(eof)
+        yield from self._handle_eof(eof)
         rowcount = len(rows)
         if rowcount >= 0 and self._rowcount == -1:
             self._rowcount = 0
@@ -929,7 +934,7 @@ class AioMySQLCursorNamedTuple(AioMySQLCursor):
             rows.insert(0, self._nextrow[0])
         res = [self._row_to_python(row, self.description)
                for row in rows]
-        self._handle_eof(eof)
+        yield from self._handle_eof(eof)
         rowcount = len(rows)
         if rowcount >= 0 and self._rowcount == -1:
             self._rowcount = 0
