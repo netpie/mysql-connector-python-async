@@ -27,6 +27,7 @@ def main(config):
         output.append(repr(row))
 
     db.close()
+    print("current database:", (yield from db.database))
     print('\n'.join(output))
 
 if __name__ == '__main__':

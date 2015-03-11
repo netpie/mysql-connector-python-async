@@ -26,7 +26,7 @@ MySQL Connector/Python - MySQL drive written in Python
 """
 
 from . import version
-from .connection import MySQLConnection
+from .connection import AioMySQLConnection
 from mysql.connector.errors import (  # pylint: disable=W0622
     Error, Warning, InterfaceError, DatabaseError,
     NotSupportedError, DataError, IntegrityError, ProgrammingError,
@@ -46,9 +46,7 @@ _CONNECTION_POOLS = {}
 def _get_pooled_connection(**kwargs):
     """Return a pooled MySQL connection"""
     # If no pool name specified, generate one
-    from .pooling import (
-        MySQLConnectionPool, generate_pool_name,
-        CONNECTION_POOL_LOCK)
+    from .pooling import (MySQLConPooL, generate_pool_name, CONNECTION_POOL_LOCK)
 
     try:
         pool_name = kwargs['pool_name']
@@ -58,8 +56,8 @@ def _get_pooled_connection(**kwargs):
     # Setup the pool, ensuring only 1 thread can update at a time
     with CONNECTION_POOL_LOCK:
         if pool_name not in _CONNECTION_POOLS:
-            _CONNECTION_POOLS[pool_name] = MySQLConnectionPool(**kwargs)
-        elif isinstance(_CONNECTION_POOLS[pool_name], MySQLConnectionPool):
+            _CONNECTION_POOLS[pool_name] = MySQLConPool(**kwargs)
+        elif isinstance(_CONNECTION_POOLS[pool_name], MySQLConPool):
             # pool_size must be the same
             check_size = _CONNECTION_POOLS[pool_name].pool_size
             if ('pool_size' in kwargs
@@ -84,7 +82,7 @@ def _get_failover_connection(**kwargs):
     unix_socket and database. ValueError is also raised when the failover
     argument was not provided.
 
-    Returns MySQLConnection instance.
+    Returns AioSQLConnection instance.
     """
     config = kwargs.copy()
     try:
@@ -122,13 +120,13 @@ def connect(*args, **kwargs):
     """Create or get a MySQL connection object
 
     In its simpliest form, Connect() will open a connection to a
-    MySQL server and return a MySQLConnection object.
+    MySQL server and return a AioSQLConnection object.
 
     When any connection pooling arguments are given, for example pool_name
     or pool_size, a pool is created or a previously one is used to return
-    a PooledMySQLConnection.
+    a PooledAioSQLConnection.
 
-    Returns MySQLConnection or PooledMySQLConnection.
+    Returns AioSQLConnection or PooledAioSQLConnection.
     """
     # Option files
     if 'option_files' in kwargs:
@@ -148,7 +146,7 @@ def connect(*args, **kwargs):
 
     # Pooled connections
     try:
-        from .pooling import CNX_POOL_ARGS
+        from mysql.connector.pooling import CNX_POOL_ARGS
         if any([key in kwargs for key in CNX_POOL_ARGS]):
             return _get_pooled_connection(**kwargs)
     except NameError:
@@ -156,14 +154,14 @@ def connect(*args, **kwargs):
         pass
 
     # Regular connection
-    return MySQLConnection(*args, **kwargs)
+    return AioMySQLConnection(*args, **kwargs)
 Connect = connect  # pylint: disable=C0103
 
 __version_info__ = version.VERSION
 __version__ = version.VERSION_TEXT
 
 __all__ = [
-    'MySQLConnection', 'Connect', 'custom_error_exception',
+    'AioSQLConnection', 'Connect', 'custom_error_exception',
 
     # Some useful constants
     'FieldType', 'FieldFlag', 'ClientFlag', 'CharacterSet', 'RefreshOption',

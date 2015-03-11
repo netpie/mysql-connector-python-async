@@ -21,7 +21,7 @@ def main(config):
         "CREATE TABLE names ("
         "    id TINYINT UNSIGNED NOT NULL AUTO_INCREMENT, "
         "    name VARCHAR(30) DEFAULT '' NOT NULL, "
-        "    info TEXT DEFAULT '', "
+        "    info TEXT , "
         "    age TINYINT UNSIGNED DEFAULT '30', "
         "    PRIMARY KEY (id))"
     )

@@ -6,10 +6,11 @@ CREATE_TABLE = (
    "CREATE TABLE names ("
         "    id INT UNSIGNED NOT NULL AUTO_INCREMENT, "
         "    name NVARCHAR(30) DEFAULT '' NOT NULL, "
-        "    info TEXT DEFAULT '', "
+        "    info TEXT ,"
         "    age TINYINT UNSIGNED DEFAULT '30', "
         "    PRIMARY KEY (id))"
 )
+
 
 @asyncio.coroutine
 def main(pcnx, loop):
@@ -73,7 +74,7 @@ if __name__ == '__main__':
         'pool_size': 10,
     }
     #make a MySQLConnectionPool
-    pcnx = mysql_async.connector.pooling.MySQLConnectionPool(**config)
+    pcnx = mysql_async.connector.pooling.MySQLConPool(**config)
 
     loop = asyncio.get_event_loop()
     loop.run_until_complete(main(pcnx, loop))

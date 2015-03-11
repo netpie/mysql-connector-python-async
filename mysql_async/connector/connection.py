@@ -46,101 +46,20 @@ from .cursor import (
 from .network import MySQLUnixSocket, MySQLTCPSocket
 from .protocol import MySQLProtocol
 from mysql.connector.utils import int4store
+from mysql.connector.connection import MySQLConnection, DEFAULT_CONFIGURATION
 
 
-DEFAULT_CONFIGURATION = {
-    'database': None,
-    'user': '',
-    'password': '',
-    'host': '127.0.0.1',
-    'port': 3306,
-    'unix_socket': None,
-    'use_unicode': True,
-    'charset': 'utf8',
-    'collation': None,
-    'converter_class': MySQLConverter,
-    'autocommit': False,
-    'time_zone': None,
-    'sql_mode': None,
-    'get_warnings': False,
-    'raise_on_warnings': False,
-    'connection_timeout': None,
-    'client_flags': 0,
-    'compress': False,
-    'buffered': False,
-    'raw': False,
-    'ssl_ca': None,
-    'ssl_cert': None,
-    'ssl_key': None,
-    'ssl_verify_cert': False,
-    'passwd': None,
-    'db': None,
-    'connect_timeout': None,
-    'dsn': None,
-    'force_ipv6': False,
-    'auth_plugin': None,
-    'allow_local_infile': True,
-}
-
-
-class MySQLConnection(object):
+class AioMySQLConnection(MySQLConnection):
     """Connection to a MySQL Server"""
     def __init__(self, loop=None, *args, **kwargs):
+        super(AioMySQLConnection, self).__init__()
         self._loop = loop
         if loop is None:
             self._loop = asyncio.get_event_loop()
-        self._protocol = None
-        self._socket = None
-        self._handshake = None
-        self._server_version = None
-        self.converter = None
-        self._converter_class = MySQLConverter
-
-        self._client_flags = ClientFlag.get_default()
-        self._charset_id = 33
-        self._sql_mode = None
-        self._time_zone = None
-        self._autocommit = False
-
-        self._user = ''
-        self._password = ''
-        self._database = ''
-        self._host = '127.0.0.1'
-        self._port = 3306
-        self._unix_socket = None
-        self._client_host = ''
-        self._client_port = 0
-        self._ssl = {}
-        self._force_ipv6 = False
-
-        self._use_unicode = True
-        self._get_warnings = False
-        self._raise_on_warnings = False
-        self._connection_timeout = None
-        self._buffered = False
-        self._unread_result = False
-        self._have_next_result = False
-        self._raw = False
-        self._in_transaction = False
-
-        self._prepared_statements = None
-
-        self._ssl_active = False
-        self._auth_plugin = None
-        self._pool_config_version = None
-        self._compress = False
 
         if len(kwargs) > 0:
             #self.connect(**kwargs) #removed, for __init__ can not yield from coroutine
             self.config(**kwargs)
-
-    def _get_self(self):
-        """Return self for weakref.proxy
-
-        This method is used when the original object is needed when using
-        weakref.proxy.
-        """
-        return self
 
     @asyncio.coroutine
     def _do_handshake(self):
@@ -246,155 +165,6 @@ class MySQLConnection(object):
         elif packet[4] == 255:
             raise errors.get_exception(packet)
 
-    def config(self, **kwargs):
-        """Configure the MySQL Connection
-
-        This method allows you to configure the MySQLConnection instance.
-
-        Raises on errors.
-        """
-        config = kwargs.copy()
-        if 'dsn' in config:
-            raise errors.NotSupportedError("Data source name is not supported")
-
-        # Configure how we handle MySQL warnings
-        try:
-            self.get_warnings = config['get_warnings']
-            del config['get_warnings']
-        except KeyError:
-            pass  # Leave what was set or default
-        try:
-            self.raise_on_warnings = config['raise_on_warnings']
-            del config['raise_on_warnings']
-        except KeyError:
-            pass  # Leave what was set or default
-
-        # Configure client flags
-        try:
-            default = ClientFlag.get_default()
-            self.set_client_flags(config['client_flags'] or default)
-            del config['client_flags']
-        except KeyError:
-            pass  # Missing client_flags-argument is OK
-
-        try:
-            if config['compress']:
-                self._compress = True
-                self.set_client_flags([ClientFlag.COMPRESS])
-        except KeyError:
-            pass  # Missing compress argument is OK
-
-        try:
-            if not config['allow_local_infile']:
-                self.set_client_flags([-ClientFlag.LOCAL_FILES])
-        except KeyError:
-            pass  # Missing allow_local_infile argument is OK
-
-        # Configure character set and collation
-        if 'charset' in config or 'collation' in config:
-            try:
-                charset = config['charset']
-                del config['charset']
-            except KeyError:
-                charset = None
-            try:
-                collation = config['collation']
-                del config['collation']
-            except KeyError:
-                collation = None
-            self._charset_id = CharacterSet.get_charset_info(charset,
-                                                             collation)[0]
-
-        # Set converter class
-        try:
-            self.set_converter_class(config['converter_class'])
-        except KeyError:
-            pass  # Using default converter class
-        except TypeError:
-            raise AttributeError("Converter class should be a subclass "
-                                 "of conversion.MySQLConverterBase.")
-
-        # Compatible configuration with other drivers
-        compat_map = [
-            # (<other driver argument>,<translates to>)
-            ('db', 'database'),
-            ('passwd', 'password'),
-            ('connect_timeout', 'connection_timeout'),
-        ]
-        for compat, translate in compat_map:
-            try:
-                if translate not in config:
-                    config[translate] = config[compat]
-                del config[compat]
-            except KeyError:
-                pass  # Missing compat argument is OK
-
-        # Configure login information
-        if 'user' in config or 'password' in config:
-            try:
-                user = config['user']
-                del config['user']
-            except KeyError:
-                user = self._user
-            try:
-                password = config['password']
-                del config['password']
-            except KeyError:
-                password = self._password
-            self.set_login(user, password)
-
-        # Check network locations
-        try:
-            self._port = int(config['port'])
-            del config['port']
-        except KeyError:
-            pass  # Missing port argument is OK
-        except ValueError:
-            raise errors.InterfaceError(
-                "TCP/IP port number should be an integer")
-
-        # Other configuration
-        set_ssl_flag = False
-        for key, value in config.items():
-            try:
-                DEFAULT_CONFIGURATION[key]
-            except KeyError:
-                raise AttributeError("Unsupported argument '{0}'".format(key))
-            # SSL Configuration
-            if key.startswith('ssl_'):
-                set_ssl_flag = True
-                self._ssl.update({key.replace('ssl_', ''): value})
-            else:
-                attribute = '_' + key
-                try:
-                    setattr(self, attribute, value.strip())
-                except AttributeError:
-                    setattr(self, attribute, value)
-
-        if set_ssl_flag:
-            if 'verify_cert' not in self._ssl:
-                self._ssl['verify_cert'] = \
-                    DEFAULT_CONFIGURATION['ssl_verify_cert']
-            # Make sure both ssl_key/ssl_cert are set, or neither (XOR)
-            if 'ca' not in self._ssl or self._ssl['ca'] is None:
-                raise AttributeError(
-                    "Missing ssl_ca argument.")
-            if bool('key' in self._ssl) != bool('cert' in self._ssl):
-                raise AttributeError(
-                    "ssl_key and ssl_cert need to be both "
-                    "specified, or neither."
-                )
-            # Make sure key/cert are set to None
-            elif not set(('key', 'cert')) <= set(self._ssl):
-                self._ssl['key'] = None
-                self._ssl['cert'] = None
-            elif (self._ssl['key'] is None) != (self._ssl['cert'] is None):
-                raise AttributeError(
-                    "ssl_key and ssl_cert need to be both "
-                    "set, or neither."
-                )
-            self.set_client_flags([ClientFlag.SSL])
-
     def _get_connection(self, prtcls=None):
         """Get connection based on configuration
 
@@ -432,20 +202,6 @@ class MySQLConnection(object):
             self._socket.recv = self._socket.recv_compressed
             self._socket.send = self._socket.send_compressed
 
-    def _post_connection(self):
-        """Executes commands after connection has been established
-
-        This method executes commands after the connection has been
-        established. Some setting like autocommit, character set, and SQL mode
-        are set using this method.
-        """
-        self.set_charset_collation(self._charset_id)
-        self.autocommit = self._autocommit
-        if self._time_zone:
-            self.time_zone = self._time_zone
-        if self._sql_mode:
-            self.sql_mode = self._sql_mode
-
     @asyncio.coroutine
     def connect(self, **kwargs):
         """Connect to the MySQL server
@@ -462,30 +218,6 @@ class MySQLConnection(object):
         self.disconnect()
         yield from self._open_connection()
         self._post_connection()
-
-    def shutdown(self):
-        """Shut down connection to MySQL Server.
-        """
-        if not self._socket:
-            return
-
-        try:
-            self._socket.shutdown()
-        except (AttributeError, errors.Error):
-            pass  # Getting an exception would mean we are disconnected.
-
-    def disconnect(self):
-        """Disconnect from the MySQL server
-        """
-        if not self._socket:
-            return
-
-        try:
-            self.cmd_quit()
-            self._socket.close_connection()
-        except (AttributeError, errors.Error):
-            pass  # Getting an exception would mean we are disconnected.
-    close = disconnect
 
     @asyncio.coroutine
     def _send_cmd(self, command, argument=None, packet_number=0, packet=None,
@@ -556,57 +288,7 @@ class MySQLConnection(object):
                     "MySQL Connection not available.")
         return (yield from self._socket.recv())
 
-    def _handle_server_status(self, flags):
-        """Handle the server flags found in MySQL packets
-
-        This method handles the server flags send by MySQL OK and EOF
-        packets. It, for example, checks whether there exists more result
-        sets or whether there is an ongoing transaction.
-        """
-        self._have_next_result = flag_is_set(ServerFlag.MORE_RESULTS_EXISTS,
-                                             flags)
-        self._in_transaction = flag_is_set(ServerFlag.STATUS_IN_TRANS, flags)
-
-    @property
-    def in_transaction(self):
-        """MySQL session has started a transaction
-        """
-        return self._in_transaction
-
-    def _handle_ok(self, packet):
-        """Handle a MySQL OK packet
-
-        This method handles a MySQL OK packet. When the packet is found to
-        be an Error packet, an error will be raised. If the packet is neither
-        an OK or an Error packet, errors.InterfaceError will be raised.
-
-        Returns a dict()
-        """
-        if packet[4] == 0:
-            ok_pkt = self._protocol.parse_ok(packet)
-            self._handle_server_status(ok_pkt['server_status'])
-            return ok_pkt
-        elif packet[4] == 255:
-            raise errors.get_exception(packet)
-        raise errors.InterfaceError('Expected OK packet')
-
-    def _handle_eof(self, packet):
-        """Handle a MySQL EOF packet
-
-        This method handles a MySQL EOF packet. When the packet is found to
-        be an Error packet, an error will be raised. If the packet is neither
-        and OK or an Error packet, errors.InterfaceError will be raised.
-
-        Returns a dict()
-        """
-        if packet[4] == 254:
-            eof = self._protocol.parse_eof(packet)
-            self._handle_server_status(eof['status_flag'])
-            return eof
-        elif packet[4] == 255:
-            raise errors.get_exception(packet)
-        raise errors.InterfaceError('Expected EOF packet')
-
+    @asyncio.coroutine
     def _handle_load_data_infile(self, filename):
         """Handle a LOAD DATA INFILE LOCAL request"""
         try:
@@ -614,6 +296,7 @@ class MySQLConnection(object):
         except IOError:
             # Send a empty packet to cancel the operation
             try:
+
                 self._socket.send(b'')
             except AttributeError:
                 raise errors.OperationalError(
@@ -752,7 +435,6 @@ class MySQLConnection(object):
                 raise errors.InternalError("Unread result found.")
         return (yield from self._handle_result((yield from self._socket.recv())))
 
-
     @asyncio.coroutine
     def cmd_query_many(self, statements):
         """Send one or more statements to the MySQL server
@@ -851,19 +533,6 @@ class MySQLConnection(object):
         yield from self._socket.drain()
         self._socket.send(packet, 0)
         return self._protocol.parse_statistics((yield from self._socket.recv()))
-
-    def cmd_process_info(self):
-        """Get the process list of the MySQL Server
-
-        This method is a placeholder to notify that the PROCESS_INFO command
-        is not supported by raising the NotSupportedError. The command
-        "SHOW PROCESSLIST" should be send using the cmd_query()-method or
-        using the INFORMATION_SCHEMA database.
-
-        Raises NotSupportedError exception
-        """
-        raise errors.NotSupportedError(
-            "Not implemented. Use SHOW PROCESSLIST or INFORMATION_SCHEMA")
 
     @asyncio.coroutine
     def cmd_process_kill(self, mysql_pid):
@@ -1052,244 +721,21 @@ class MySQLConnection(object):
                 raise errors.InterfaceError("Connection to MySQL is"
                                             " not available.")
 
-    def set_converter_class(self, convclass):
-        """
-        Set the converter class to be used. This should be a class overloading
-        methods and members of conversion.MySQLConverter.
-        """
-        if issubclass(convclass, MySQLConverterBase):
-            charset_name = CharacterSet.get_info(self._charset_id)[0]
-            self._converter_class = convclass
-            self.converter = convclass(charset_name, self._use_unicode)
-        else:
-            raise TypeError("Converter class should be a subclass "
-                            "of conversion.MySQLConverterBase.")
-
-    def get_server_version(self):
-        """Get the MySQL version
-
-        This method returns the MySQL server version as a tuple. If not
-        previously connected, it will return None.
-
-        Returns a tuple or None.
-        """
-        return self._server_version
-
-    def get_server_info(self):
-        """Get the original MySQL version information
-
-        This method returns the original MySQL server as text. If not
-        previously connected, it will return None.
-
-        Returns a string or None.
-        """
-        try:
-            return self._handshake['server_version_original']
-        except (TypeError, KeyError):
-            return None
-
-    @property
-    def connection_id(self):
-        """MySQL connection ID"""
-        try:
-            return self._handshake['server_threadid']
-        except KeyError:
-            return None
-
-    def set_login(self, username=None, password=None):
-        """Set login information for MySQL
-
-        Set the username and/or password for the user connecting to
-        the MySQL Server.
-        """
-        if username is not None:
-            self._user = username.strip()
-        else:
-            self._user = ''
-        if password is not None:
-            self._password = password.strip()
-        else:
-            self._password = ''
-
-    def set_unicode(self, value=True):
-        """Toggle unicode mode
-
-        Set whether we return string fields as unicode or not.
-        Default is True.
-        """
-        self._use_unicode = value
-        if self.converter:
-            self.converter.set_unicode(value)
-
-    def set_charset_collation(self, charset=None, collation=None):
-        """Sets the character set and collation for the current connection
-
-        This method sets the character set and collation to be used for
-        the current connection. The charset argument can be either the
-        name of a character set as a string, or the numerical equivalent
-        as defined in constants.CharacterSet.
-
-        When the collation is not given, the default will be looked up and
-        used.
-
-        For example, the following will set the collation for the latin1
-        character set to latin1_general_ci:
-
-           set_charset('latin1','latin1_general_ci')
-
-        """
-        if charset:
-            if isinstance(charset, int):
-                self._charset_id = charset
-                (self._charset_id, charset_name, collation_name) = \
-                    CharacterSet.get_charset_info(charset)
-            elif isinstance(charset, str):
-                (self._charset_id, charset_name, collation_name) = \
-                    CharacterSet.get_charset_info(charset, collation)
-            else:
-                raise ValueError(
-                    "charset should be either integer, string or None")
-        elif collation:
-            (self._charset_id, charset_name, collation_name) = \
-                    CharacterSet.get_charset_info(collation=collation)
-
-        self._execute_query("SET NAMES '{0}' COLLATE '{1}'".format(
-            charset_name, collation_name))
-        self.converter.set_charset(charset_name)
-
-    @property
-    def charset(self):
-        """Returns the character set for current connection
-
-        This property returns the character set name of the current connection.
-        The server is queried when the connection is active. If not connected,
-        the configured character set name is returned.
-
-        Returns a string.
-        """
-        return CharacterSet.get_info(self._charset_id)[0]
-
-    @property
-    def python_charset(self):
-        """Returns the Python character set for current connection
-
-        This property returns the character set name of the current connection.
-        Note that, unlike property charset, this checks if the previously set
-        character set is supported by Python and if not, it returns the
-        equivalent character set that Python supports.
-
-        Returns a string.
-        """
-        encoding = CharacterSet.get_info(self._charset_id)[0]
-        if encoding in ('utf8mb4', 'binary'):
-            return 'utf8'
-        else:
-            return encoding
-
-    @property
-    def collation(self):
-        """Returns the collation for current connection
-
-        This property returns the collation name of the current connection.
-        The server is queried when the connection is active. If not connected,
-        the configured collation name is returned.
-
-        Returns a string.
-        """
-        return CharacterSet.get_charset_info(self._charset_id)[2]
-
-    def set_client_flags(self, flags):
-        """Set the client flags
-
-        The flags-argument can be either an int or a list (or tuple) of
-        ClientFlag-values. If it is an integer, it will set client_flags
-        to flags as is.
-        If flags is a list (or tuple), each flag will be set or unset
-        when it's negative.
-
-        set_client_flags([ClientFlag.FOUND_ROWS,-ClientFlag.LONG_FLAG])
-
-        Raises ProgrammingError when the flags argument is not a set or
-        an integer bigger than 0.
-
-        Returns self.client_flags
-        """
-        if isinstance(flags, int) and flags > 0:
-            self._client_flags = flags
-        elif isinstance(flags, (tuple, list)):
-            for flag in flags:
-                if flag < 0:
-                    self._client_flags &= ~abs(flag)
-                else:
-                    self._client_flags |= flag
-        else:
-            raise errors.ProgrammingError(
-                "set_client_flags expect integer (>0) or set")
-        return self._client_flags
-
-    def isset_client_flag(self, flag):
-        """Check if a client flag is set"""
-        if (self._client_flags & flag) > 0:
-            return True
-        return False
-
-    @property
-    def user(self):
-        """User used while connecting to MySQL"""
-        return self._user
-
-    @property
-    def server_host(self):
-        """MySQL server IP address or name"""
-        return self._host
-
-    @property
-    def server_port(self):
-        "MySQL server TCP/IP port"
-        return self._port
-
-    @property
-    def unix_socket(self):
-        """MySQL Unix socket file location"""
-        return self._unix_socket
-
-    def _set_unread_result(self, toggle):
-        """Set whether there is an unread result
-
-        This method is used by cursors to let other cursors know there is
-        still a result set that needs to be retrieved.
-
-        Raises ValueError on errors.
-        """
-        if not isinstance(toggle, bool):
-            raise ValueError("Expected a boolean type")
-        self._unread_result = toggle
-
-    def _get_unread_result(self):
-        """Get whether there is an unread result
-
-        This method is used by cursors to check whether another cursor still
-        needs to retrieve its result set.
-
-        Returns True, or False when there is no unread result.
-        """
-        return self._unread_result
-
-    unread_result = property(_get_unread_result, _set_unread_result,
-                             doc="Unread result for this MySQL connection")
-
+    @asyncio.coroutine
     def set_database(self, value):
         """Set the current database"""
-        self.cmd_query("USE %s" % value)
+        yield from self.cmd_query("USE %s" % value)
 
+    @asyncio.coroutine
     def get_database(self):
         """Get the current database"""
-        return self._info_query("SELECT DATABASE()")[0]
+        return (yield from self._info_query("SELECT DATABASE()"))[0]
     database = property(get_database, set_database, doc="Current database")
 
+    @asyncio.coroutine
     def set_time_zone(self, value):
         """Set the time zone"""
-        self.cmd_query("SET @@session.time_zone = '{0}'".format(value))
+        yield from self.cmd_query("SET @@session.time_zone = '{0}'".format(value))
         self._time_zone = value
 
     def get_time_zone(self):
@@ -1298,6 +744,7 @@ class MySQLConnection(object):
     time_zone = property(get_time_zone, set_time_zone,
                          doc="time_zone value for current MySQL session")
 
+    @asyncio.coroutine
     def set_sql_mode(self, value):
         """Set the SQL mode
 
@@ -1311,85 +758,30 @@ class MySQLConnection(object):
         """
         if isinstance(value, (list, tuple)):
             value = ','.join(value)
-        self.cmd_query("SET @@session.sql_mode = '{0}'".format(value))
+        yield from self.cmd_query("SET @@session.sql_mode = '{0}'".format(value))
         self._sql_mode = value
 
+    @asyncio.coroutine
     def get_sql_mode(self):
         """Get the SQL mode"""
-        return self._info_query("SELECT @@session.sql_mode")[0]
+        return (yield from self._info_query("SELECT @@session.sql_mode"))[0]
     sql_mode = property(get_sql_mode, set_sql_mode,
                         doc="sql_mode value for current MySQL session")
 
+    @asyncio.coroutine
     def set_autocommit(self, value):
         """Toggle autocommit"""
         switch = 'ON' if value else 'OFF'
-        self._execute_query("SET @@session.autocommit = {0}".format(switch))
+        yield from self._execute_query("SET @@session.autocommit = {0}".format(switch))
         self._autocommit = value
 
+    @asyncio.coroutine
     def get_autocommit(self):
         """Get whether autocommit is on or off"""
-        value = self._info_query("SELECT @@session.autocommit")[0]
+        value = (yield from self._info_query("SELECT @@session.autocommit"))[0]
         return True if value == 1 else False
     autocommit = property(get_autocommit, set_autocommit,
                           doc="autocommit value for current MySQL session")
-
-    def _set_getwarnings(self, toggle):
-        """Set whether warnings should be automatically retrieved
-
-        The toggle-argument must be a boolean. When True, cursors for this
-        connection will retrieve information about warnings (if any).
-
-        Raises ValueError on error.
-        """
-        if not isinstance(toggle, bool):
-            raise ValueError("Expected a boolean type")
-        self._get_warnings = toggle
-
-    def _get_getwarnings(self):
-        """Get whether this connection retrieves warnings automatically
-
-        This method returns whether this connection retrieves warnings
-        automatically.
-
-        Returns True, or False when warnings are not retrieved.
-        """
-        return self._get_warnings
-
-    get_warnings = property(
-        _get_getwarnings, _set_getwarnings,
-        doc="Toggle and check whether to retrieve warnings automatically")
-
-    def _set_raise_on_warnings(self, toggle):
-        """Set whether warnings raise an error
-
-        The toggle-argument must be a boolean. When True, cursors for this
-        connection will raise an error when MySQL reports warnings.
-
-        Raising on warnings implies retrieving warnings automatically. In
-        other words: warnings will be set to True. If set to False, warnings
-        will be also set to False.
-
-        Raises ValueError on error.
-        """
-        if not isinstance(toggle, bool):
-            raise ValueError("Expected a boolean type")
-        self._raise_on_warnings = toggle
-        self._get_warnings = toggle
-
-    def _get_raise_on_warnings(self):
-        """Get whether this connection raises an error on warnings
-
-        This method returns whether this connection will raise errors when
-        MySQL reports warnings.
-
-        Returns True or False.
-        """
-        return self._raise_on_warnings
-
-    raise_on_warnings = property(
-        _get_raise_on_warnings, _set_raise_on_warnings,
-        doc="Toggle whether to raise on warnings "\
-            "(implies retrieving warnings).")
 
     @asyncio.coroutine
     def cursor(self, buffered=None, raw=None, prepared=None, cursor_class=None,
@@ -1545,22 +937,6 @@ class MySQLConnection(object):
         cursor = yield from self.cursor(buffered=True)
         yield from cursor.execute(query)
         return (yield from cursor.fetchone())
-
-    def _handle_binary_ok(self, packet):
-        """Handle a MySQL Binary Protocol OK packet
-
-        This method handles a MySQL Binary Protocol OK packet. When the
-        packet is found to be an Error packet, an error will be raised. If
-        the packet is neither an OK or an Error packet, errors.InterfaceError
-        will be raised.
-
-        Returns a dict()
-        """
-        if packet[4] == 0:
-            return self._protocol.parse_binary_prepare_ok(packet)
-        elif packet[4] == 255:
-            raise errors.get_exception(packet)
-        raise errors.InterfaceError('Expected Binary OK packet')
 
     @asyncio.coroutine
     def _handle_binary_result(self, packet):
