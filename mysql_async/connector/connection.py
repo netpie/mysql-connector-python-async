@@ -38,11 +38,11 @@ from mysql.connector.constants import (
     flag_is_set, ShutdownType, NET_BUFFER_LENGTH
 )
 from mysql.connector.conversion import MySQLConverterBase, MySQLConverter
+from mysql.connector.cursor import CursorBase
 from .cursor import (
-    CursorBase, MySQLCursor, MySQLCursorRaw,
-    MySQLCursorBuffered, MySQLCursorBufferedRaw, MySQLCursorPrepared,
-    MySQLCursorDict, MySQLCursorBufferedDict, MySQLCursorNamedTuple,
-    MySQLCursorBufferedNamedTuple)
+    AioMySQLCursor, AioMySQLCursorRaw,AioMySQLCursorBuffered,
+    AioMySQLCursorBufferedRaw, AioMySQLCursorPrepared, AioMySQLCursorDict,
+    AioMySQLCursorBufferedDict, AioMySQLCursorNamedTuple, AioMySQLCursorBufferedNamedTuple)
 from .network import MySQLUnixSocket, MySQLTCPSocket
 from .protocol import MySQLProtocol
 from mysql.connector.utils import int4store
@@ -832,15 +832,15 @@ class AioMySQLConnection(MySQLConnection):
             cursor_type |= 16
 
         types = {
-            0: MySQLCursor,  # 0
-            1: MySQLCursorBuffered,
-            2: MySQLCursorRaw,
-            3: MySQLCursorBufferedRaw,
-            4: MySQLCursorDict,
-            5: MySQLCursorBufferedDict,
-            8: MySQLCursorNamedTuple,
-            9: MySQLCursorBufferedNamedTuple,
-            16: MySQLCursorPrepared
+            0: AioMySQLCursor,  # 0
+            1: AioMySQLCursorBuffered,
+            2: AioMySQLCursorRaw,
+            3: AioMySQLCursorBufferedRaw,
+            4: AioMySQLCursorDict,
+            5: AioMySQLCursorBufferedDict,
+            8: AioMySQLCursorNamedTuple,
+            9: AioMySQLCursorBufferedNamedTuple,
+            16: AioMySQLCursorPrepared
         }
         try:
             return (types[cursor_type])(self)

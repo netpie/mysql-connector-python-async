@@ -26,240 +26,16 @@
 
 from collections import namedtuple
 import re
-import weakref
 import asyncio
 
 from mysql.connector import errors
+from mysql.connector.cursor import (
+    MySQLCursor, SQL_COMMENT, RE_SQL_COMMENT, RE_SQL_ON_DUPLICATE, RE_SQL_INSERT_STMT,
+    RE_SQL_INSERT_VALUES, RE_PY_PARAM, RE_SQL_SPLIT_STMTS, RE_SQL_FIND_PARAM,
+    _ERR_NO_RESULT_TO_FETCH, _ParamSubstitutor)
 
 
-SQL_COMMENT = r"\/\*.*?\*\/"
-RE_SQL_COMMENT = re.compile(
-    r'''({0})|(["'`][^"'`]*?({0})[^"'`]*?["'`])'''.format(SQL_COMMENT),
-    re.I | re.M | re.S)
-RE_SQL_ON_DUPLICATE = re.compile(
-    r'''\s*ON\s+DUPLICATE\s+KEY(?:[^"'`]*["'`][^"'`]*["'`])*[^"'`]*$''',
-    re.I | re.M | re.S)
-RE_SQL_INSERT_STMT = re.compile(
-    r"({0}|\s)*INSERT({0}|\s)*INTO.+VALUES.*".format(SQL_COMMENT),
-    re.I | re.M | re.S)
-RE_SQL_INSERT_VALUES = re.compile(r'.*VALUES\s*(\(.*\)).*', re.I | re.M | re.S)
-RE_PY_PARAM = re.compile(b'(%s)')
-RE_SQL_SPLIT_STMTS = re.compile(
-    b''';(?=(?:[^"'`]*["'`][^"'`]*["'`])*[^"'`]*$)''')
-RE_SQL_FIND_PARAM = re.compile(
-    b'''%s(?=(?:[^"'`]*["'`][^"'`]*["'`])*[^"'`]*$)''')
-
-_ERR_NO_RESULT_TO_FETCH = "No result set to fetch from."
-
-
-class _ParamSubstitutor(object):
-    """
-    Substitutes parameters into SQL statement.
-    """
-    def __init__(self, params):
-        self.params = params
-        self.index = 0
-
-    def __call__(self, matchobj):
-        index = self.index
-        self.index += 1
-        try:
-            return bytes(self.params[index])
-        except IndexError:
-            raise errors.ProgrammingError(
-                "Not enough parameters for the SQL statement")
-
-    @property
-    def remaining(self):
-        """Returns number of parameters remaining to be substituted"""
-        return len(self.params) - self.index
-
-
-class CursorBase(object):
-    """
-    Base for defining MySQLCursor. This class is a skeleton and defines
-    methods and members as required for the Python Database API
-    Specification v2.0.
-
-    It's better to inherite from MySQLCursor.
-    """
-
-    def __init__(self):
-        self._description = None
-        self._rowcount = -1
-        self._last_insert_id = None
-        self.arraysize = 1
-
-    @asyncio.coroutine
-    def callproc(self, procname, args=()):
-        """Calls a stored procedue with the given arguments
-
-        The arguments will be set during this session, meaning
-        they will be called like  _<procname>__arg<nr> where
-        <nr> is an enumeration (+1) of the arguments.
-
-        Coding Example:
-          1) Definining the Stored Routine in MySQL:
-          CREATE PROCEDURE multiply(IN pFac1 INT, IN pFac2 INT, OUT pProd INT)
-          BEGIN
-            SET pProd := pFac1 * pFac2;
-          END
-
-          2) Executing in Python:
-          args = (5,5,0) # 0 is to hold pprod
-          cursor.callproc('multiply', args)
-          print(cursor.fetchone())
-
-        Does not return a value, but a result set will be
-        available when the CALL-statement execute successfully.
-        Raises exceptions when something is wrong.
-        """
-        pass
-
-    def close(self):
-        """Close the cursor."""
-        pass
-
-    @asyncio.coroutine
-    def execute(self, operation, params=(), multi=False):
-        """Executes the given operation
-
-        Executes the given operation substituting any markers with
-        the given parameters.
-
-        For example, getting all rows where id is 5:
-          cursor.execute("SELECT * FROM t1 WHERE id = %s", (5,))
-
-        The multi argument should be set to True when executing multiple
-        statements in one operation. If not set and multiple results are
-        found, an InterfaceError will be raised.
-
-        If warnings where generated, and connection.get_warnings is True, then
-        self._warnings will be a list containing these warnings.
-
-        Returns an iterator when multi is True, otherwise None.
-        """
-        pass
-
-    @asyncio.coroutine
-    def executemany(self, operation, seqparams):
-        """Execute the given operation multiple times
-
-        The executemany() method will execute the operation iterating
-        over the list of parameters in seq_params.
-
-        Example: Inserting 3 new employees and their phone number
-
-        data = [
-            ('Jane','555-001'),
-            ('Joe', '555-001'),
-            ('John', '555-003')
-            ]
-        stmt = "INSERT INTO employees (name, phone) VALUES ('%s','%s')"
-        cursor.executemany(stmt, data)
-
-        INSERT statements are optimized by batching the data, that is
-        using the MySQL multiple rows syntax.
-
-        Results are discarded. If they are needed, consider looping over
-        data using the execute() method.
-        """
-        pass
-
-    @asyncio.coroutine
-    def fetchone(self):
-        """Returns next row of a query result set
-
-        Returns a tuple or None.
-        """
-        pass
-
-    @asyncio.coroutine
-    def fetchmany(self, size=1):
-        """Returns the next set of rows of a query result, returning a
-        list of tuples. When no more rows are available, it returns an
-        empty list.
-
-        The number of rows returned can be specified using the size argument,
-        which defaults to one
-        """
-        pass
-
-    @asyncio.coroutine
-    def fetchall(self):
-        """Returns all rows of a query result set
-
-        Returns a list of tuples.
-        """
-        pass
-
-    def nextset(self):
-        """Not Implemented."""
-        pass
-
-    def setinputsizes(self, sizes):
-        """Not Implemented."""
-        pass
-
-    def setoutputsize(self, size, column=None):
-        """Not Implemented."""
-        pass
-
-    def reset(self):
-        """Reset the cursor to default"""
-        pass
-
-    @property
-    def description(self):
-        """Returns description of columns in a result
-
-        This property returns a list of tuples describing the columns in
-        in a result set. A tuple is described as follows::
-
-                (column_name,
-                 type,
-                 None,
-                 None,
-                 None,
-                 None,
-                 null_ok,
-                 column_flags)  # Addition to PEP-249 specs
-
-        Returns a list of tuples.
-        """
-        return self._description
-
-    @property
-    def rowcount(self):
-        """Returns the number of rows produced or affected
-
-        This property returns the number of rows produced by queries
-        such as a SELECT, or affected rows when executing DML statements
-        like INSERT or UPDATE.
-
-        Note that for non-buffered cursors it is impossible to know the
-        number of rows produced before having fetched them all. For those,
-        the number of rows will be -1 right after execution, and
-        incremented when fetching rows.
-
-        Returns an integer.
-        """
-        return self._rowcount
-
-    @property
-    def lastrowid(self):
-        """Returns the value generated for an AUTO_INCREMENT column
-
-        Returns the value generated for an AUTO_INCREMENT column by
-        the previous INSERT or UPDATE statement or None when there is
-        no such value available.
-
-        Returns a long value or None.
-        """
-        return self._last_insert_id
-
-
-class MySQLCursor(CursorBase):
+class AioMySQLCursor(MySQLCursor):
     """Default cursor for interacting with MySQL
 
     This cursor will execute statements and handle the result. It will
@@ -272,18 +48,7 @@ class MySQLCursor(CursorBase):
     Implements the Python Database API Specification v2.0 (PEP-249)
     """
     def __init__(self, connection=None):
-        CursorBase.__init__(self)
-        self._connection = None
-        self._stored_results = []
-        self._nextrow = (None, None)
-        self._warnings = None
-        self._warning_count = 0
-        self._executed = None
-        self._executed_list = []
-        self._binary = False
-
-        if connection is not None:
-            self._set_connection(connection)
+        super(AioMySQLCursor, self).__init__(connection=connection)
 
     def __iter__(self):
         """
@@ -291,33 +56,6 @@ class MySQLCursor(CursorBase):
         and returns the next row.
         """
         return iter(self.fetchone, None)
-
-    def _set_connection(self, connection):
-        """Set the connection"""
-        try:
-            self._connection = weakref.proxy(connection)
-            self._connection._protocol  # pylint: disable=W0212,W0104
-        except (AttributeError, TypeError):
-            raise errors.InterfaceError(errno=2048)
-
-    def _reset_result(self):
-        """Reset the cursor to default"""
-        self._rowcount = -1
-        self._nextrow = (None, None)
-        self._stored_results = []
-        self._warnings = None
-        self._warning_count = 0
-        self._description = None
-        self._executed = None
-        #self._executed_list = []
-        self.reset()
-
-    def _have_unread_result(self):
-        """Check whether there is an unread result"""
-        try:
-            return self._connection.unread_result
-        except AttributeError:
-            return False
 
     @asyncio.coroutine
     def next(self):
@@ -337,58 +75,6 @@ class MySQLCursor(CursorBase):
         if not row:
             raise StopIteration
         return row
-
-    def close(self):
-        """Close the cursor
-
-        Returns True when successful, otherwise False.
-        """
-        if self._connection is None:
-            return False
-        if self._have_unread_result():
-            raise errors.InternalError("Unread result found.")
-
-        self._reset_result()
-        self._connection = None
-
-        return True
-
-    def _process_params_dict(self, params):
-        """Process query parameters given as dictionary"""
-        try:
-            to_mysql = self._connection.converter.to_mysql
-            escape = self._connection.converter.escape
-            quote = self._connection.converter.quote
-            res = {}
-            for key, value in list(params.items()):
-                conv = value
-                conv = to_mysql(conv)
-                conv = escape(conv)
-                conv = quote(conv)
-                res["%({0})s".format(key).encode()] = conv
-        except Exception as err:
-            raise errors.ProgrammingError(
-                "Failed processing pyformat-parameters; %s" % err)
-        else:
-            return res
-
-    def _process_params(self, params):
-        """Process query parameters."""
-        try:
-            res = params
-
-            to_mysql = self._connection.converter.to_mysql
-            escape = self._connection.converter.escape
-            quote = self._connection.converter.quote
-
-            res = [to_mysql(i) for i in res]
-            res = [escape(i) for i in res]
-            res = [quote(i) for i in res]
-        except Exception as err:
-            raise errors.ProgrammingError(
-                "Failed processing format-parameters; %s" % err)
-        else:
-            return tuple(res)
 
     @asyncio.coroutine
     def _handle_noresultset(self, res):
@@ -453,6 +139,18 @@ class MySQLCursor(CursorBase):
             self._executed = self._executed_list[0]
             return True
 
+    def _reset_result(self):
+        """Reset the cursor to default"""
+        self._rowcount = -1
+        self._nextrow = (None, None)
+        self._stored_results = []
+        self._warnings = None
+        self._warning_count = 0
+        self._description = None
+        self._executed = None
+        #self._executed_list = []
+        self.reset()
+
     @asyncio.coroutine
     def _execute_many(self, query_first):
         """Generator returns MySQLCursor objects for multiple statements
@@ -462,8 +160,6 @@ class MySQLCursor(CursorBase):
         given query_iter (result of MySQLConnection.cmd_query_iter()) and
         the list of statements that were executed.
         """
-        #executed_list = RE_SQL_SPLIT_STMTS.split(self._executed)
-        #oexecuted = self._executed_list[0].strip()
         self._reset_result()
         self._executed = self._executed_list[0].strip()
         yield from self._handle_result(query_first)
@@ -535,9 +231,7 @@ class MySQLCursor(CursorBase):
             self._executed = stmt
             self._executed_list = RE_SQL_SPLIT_STMTS.split(self._executed)
             #return self._execute_iter(self._connection.cmd_query_iter(stmt))
-            rd = yield from self._connection.cmd_query_many(stmt)
-            rd1 = yield from self._execute_many(rd)
-            return rd1
+            return (yield from self._execute_many((yield from self._connection.cmd_query_many(stmt))))
         else:
             self._executed = stmt
             try:
@@ -758,16 +452,6 @@ class MySQLCursor(CursorBase):
             raise errors.InterfaceError(
                 "Failed calling stored routine; {0}".format(err))
 
-    def getlastrowid(self):
-        """Returns the value generated for an AUTO_INCREMENT column
-
-        Returns the value generated for an AUTO_INCREMENT column by
-        the previous INSERT or UPDATE statement.
-
-        Returns a long value or None.
-        """
-        return self._last_insert_id
-
     @asyncio.coroutine
     def _fetch_warnings(self):
         """
@@ -833,10 +517,6 @@ class MySQLCursor(CursorBase):
 
         return row
 
-    def fetchwarnings(self):
-        """Returns Warnings."""
-        return self._warnings
-
     @asyncio.coroutine
     def fetchone(self):
         """Returns next row of a query result set
@@ -876,44 +556,6 @@ class MySQLCursor(CursorBase):
         self._rowcount += rowcount
         return res
 
-    @property
-    def column_names(self):
-        """Returns column names
-
-        This property returns the columns names as a tuple.
-
-        Returns a tuple.
-        """
-        if not self.description:
-            return ()
-        return tuple([d[0] for d in self.description])
-
-    @property
-    def statement(self):
-        """Returns the executed statement
-
-        This property returns the executed statement. When multiple
-        statements were executed, the current statement in the iterator
-        will be returned.
-        """
-        try:
-            return self._executed.strip().decode('utf8')
-        except AttributeError:
-            return self._executed.strip()
-
-    @property
-    def with_rows(self):
-        """Returns whether the cursor could have rows returned
-
-        This property returns True when column descriptions are available
-        and possibly also rows, which will need to be fetched.
-
-        Returns True or False.
-        """
-        if not self.description:
-            return False
-        return True
-
     def __str__(self):
         fmt = "MySQLCursor: %s"
         if self._executed:
@@ -927,7 +569,7 @@ class MySQLCursor(CursorBase):
         return res
 
 
-class MySQLCursorBuffered(MySQLCursor):
+class AioMySQLCursorBuffered(AioMySQLCursor):
     """Cursor which fetches rows within execute()"""
 
     def __init__(self, connection=None):
@@ -989,7 +631,7 @@ class MySQLCursorBuffered(MySQLCursor):
         return self._rows is not None
 
 
-class MySQLCursorRaw(MySQLCursor):
+class AioMySQLCursorRaw(AioMySQLCursor):
     """
     Skips conversion from MySQL datatypes to Python types when fetching rows.
     """
@@ -1015,7 +657,7 @@ class MySQLCursorRaw(MySQLCursor):
         return rows
 
 
-class MySQLCursorBufferedRaw(MySQLCursorBuffered):
+class AioMySQLCursorBufferedRaw(AioMySQLCursorBuffered):
     """
     Cursor which skips conversion from MySQL datatypes to Python types when
     fetching rows and fetches rows within execute().
@@ -1038,7 +680,7 @@ class MySQLCursorBufferedRaw(MySQLCursorBuffered):
         return self._rows is not None
 
 
-class MySQLCursorPrepared(MySQLCursor):
+class AioMySQLCursorPrepared(AioMySQLCursor):
     """Cursor using MySQL Prepared Statements
     """
     def __init__(self, connection=None):
@@ -1198,7 +840,7 @@ class MySQLCursorPrepared(MySQLCursor):
         return rows
 
 
-class MySQLCursorDict(MySQLCursor):
+class AioMySQLCursorDict(AioMySQLCursor):
     """
     Cursor fetching rows as dictionaries.
 
@@ -1247,7 +889,7 @@ class MySQLCursorDict(MySQLCursor):
         return res
 
 
-class MySQLCursorNamedTuple(MySQLCursor):
+class AioMySQLCursorNamedTuple(AioMySQLCursor):
     """
     Cursor fetching rows as named tuple.
 
@@ -1295,7 +937,7 @@ class MySQLCursorNamedTuple(MySQLCursor):
         return res
 
 
-class MySQLCursorBufferedDict(MySQLCursorDict, MySQLCursorBuffered):
+class AioMySQLCursorBufferedDict(AioMySQLCursorDict, AioMySQLCursorBuffered):
     """
     Buffered Cursor fetching rows as dictionaries.
     """
@@ -1322,7 +964,7 @@ class MySQLCursorBufferedDict(MySQLCursorDict, MySQLCursorBuffered):
         return res
 
 
-class MySQLCursorBufferedNamedTuple(MySQLCursorNamedTuple, MySQLCursorBuffered):
+class AioMySQLCursorBufferedNamedTuple(AioMySQLCursorNamedTuple, AioMySQLCursorBuffered):
     """
     Buffered Cursor fetching rows as named tuple.
     """
